@@ -1,0 +1,18 @@
+# Step 02 (VAD, transcription, diarization).
+#   conda env create -f envs/crowd_transcribe.yml
+name: crowd_transcribe
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - ffmpeg
+  - pandas
+  - openpyxl
+  - pip
+  - pip:
+      - torch==2.8.0
+      - torchaudio==2.8.0
+      - soundfile==0.13.1
+      - whisperx==3.8.6
+      - silero-vad==6.2.1
+      - pyannote.audio==4.0.4

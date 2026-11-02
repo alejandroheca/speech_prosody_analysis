@@ -1,0 +1,15 @@
+# data and models are not part of the repository (see README)
+data/*
+!data/README.md
+models/*
+!models/README.md
+
+# secrets
+.env
+
+# Python / OS
+__pycache__/
+*.pyc
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store

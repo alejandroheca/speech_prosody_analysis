@@ -1,0 +1,18 @@
+# Steps 01 (separation) and 03 (features).
+#   conda env create -f envs/crowd_audio.yml
+name: crowd_audio
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=2.3
+  - scipy=1.16
+  - pandas=2.2
+  - openpyxl
+  - librosa=0.11.0
+  - numba
+  - pysoundfile=0.13.1
+  - onnxruntime=1.22
+  - pip
+  - pip:
+      - opensmile==2.6.0
