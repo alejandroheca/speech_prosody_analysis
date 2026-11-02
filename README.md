@@ -1,6 +1,6 @@
-# Speech and crowd-reaction features
+# Prosodic features
 
-Utterance-level acoustic features of speech recordings: speeches, sermons,
+Utterance-level prosodic features of speech recordings: speeches, sermons,
 interviews, and debates. This is one of two parallel repositories of the same
 project, to be used together with the crowd-reaction classifier in
 [chymaera96/crowd_reaction_analysis](https://github.com/chymaera96/crowd_reaction_analysis).
@@ -11,8 +11,9 @@ The pipeline takes a recording (`.flac` recommended; `.wav` also accepted) and:
    background;
 2. transcribes the speech word by word and splits it into utterances, labelling
    who speaks when in multi-speaker recordings;
-3. computes acoustic features for every utterance (eGeMAPS, pitch, spectral
-   entropy, speech rate) and the duration of the gap after it.
+3. computes prosodic features for every utterance: the eGeMAPS set, plus
+   rhythm measures not in eGeMAPS (number of words, speech rate, and the
+   duration of the gap after the utterance).
 
 For recordings with an active crowd (`ACTIVE_CROWD = 1`), it also computes a
 simple crowd energy measure in each gap between utterances: the loudness of
@@ -99,7 +100,7 @@ python 03_features.py
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
 | 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns each chunk (WhisperX), and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote). |
-| 3 | `03_features.py` | Builds single-speaker segments and computes, per segment, eGeMAPS (openSMILE), pitch (pYIN), spectral entropy, spectral similarity to the previous segment, speech rate, and the duration and crowd loudness of the following gap. |
+| 3 | `03_features.py` | Builds single-speaker segments and computes, per segment, eGeMAPS (openSMILE), speech rate, and the duration and crowd loudness of the following gap. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
 can be restarted. `SEPARATE_N_WORKERS` and `FEATURES_N_WORKERS` in `config.py`
@@ -123,7 +124,6 @@ data/
   derived/transcripts/<name>.json                            sentences, words, times, speakers (step 2)
   derived/transcripts/<name>_*.txt                           label tracks (step 2)
   derived/features/<name>_utterance_features.csv             one row per segment (step 3)
-  derived/pitch/<name>_pitch.csv                             pYIN f0 per frame (step 3)
 ```
 
 Diarization files exist only for diarized recordings. The label tracks are
@@ -145,8 +145,6 @@ track to check it by listening.
   segment.
 - `crowd_energy_rob_lag`: `crowd_energy_rob` of the previous gap. For the first
   segment, it is the crowd before the speech starts.
-- `pyin_pitch_hz`, `pyin_pitch_hz_sd`, `pyin_voiced_frac`: pitch.
-- `sp_spectral_entropy`, `sp_spectral_entropy_sd`, `sp_spectral_similarity_prev`.
 - `sp_<eGeMAPS feature>`: the 88 eGeMAPS v02 functionals, plus
   `sp_loudness_sma3_amean_norm` and `sp_loudness_sma3_stddevNorm_norm`,
   relative to the whole recording.

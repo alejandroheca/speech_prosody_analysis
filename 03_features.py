@@ -1,5 +1,5 @@
 """
-Step 03: acoustic and crowd-reaction features of every transcribed recording.
+Step 03: prosodic and crowd-reaction features of every transcribed recording.
 
     conda activate crowd_audio
     python 03_features.py
@@ -9,17 +9,16 @@ For each recording in config.AUDIO_METADATA with a step-02 transcript:
      chunk, wordless pieces dropped, then same-speaker segments less than
      SEGMENT_MERGE_GAP_S apart merged.
   2. Per segment (in parallel): speech features of the segment (eGeMAPS,
-     pYIN pitch, spectral entropy, speech rate) and crowd features of the
-     gap after it (duration; crowd loudness relative to the whole file,
-     only for recordings with crowd features, see metadata.py).
-  3. Per segment, sequential: spectral similarity to the previous segment
-     and the crowd loudness of the previous gap (crowd_energy_rob_lag; for the
-     first segment, the crowd before the speech starts).
+     speech rate) and crowd features of the gap after it (duration; crowd
+     loudness relative to the whole file, only for recordings with crowd
+     features, see metadata.py).
+  3. Per segment: the crowd loudness of the previous gap
+     (crowd_energy_rob_lag; for the first segment, the crowd before the
+     speech starts).
   4. The metadata columns in METADATA_COPY_COLUMNS are added to every row.
 
-Outputs (recordings with both are skipped):
+Output (existing outputs are skipped):
   config.FEATURES_DIR/<name>_utterance_features.csv   one row per segment
-  config.PITCH_DIR/<name>_pitch.csv                   pYIN frames of every segment
 """
 from __future__ import annotations
 
@@ -37,15 +36,12 @@ import pandas as pd
 from prosodic_features import config
 from prosodic_features.audio import find_audio_file
 from prosodic_features.features.opensmile_features import crowd_loudness, egemaps, ratio_to_file
-from prosodic_features.features.spectral_profile import similarity_to_previous
 from prosodic_features.labels import read_silero_chunks
 from prosodic_features.metadata import Recording, load_recordings
 from prosodic_features.segment_features import compute_segment_features
 from prosodic_features.segments import (flatten_words, merge_same_speaker_segments,
                                  split_chunks_by_speaker)
 from prosodic_features.utils import format_hms
-
-PITCH_COLUMNS = ["seg_start", "seg_end", "speaker", "sentence_end", "t", "f0_hz", "voiced_prob"]
 
 
 def load_signals(speech_path: Path, crowd_path: Path):
@@ -77,9 +73,8 @@ def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
                       chunks_path: Path, transcript_path: Path) -> None:
     stem, is_speech = rec.stem, rec.crowd
     features_csv = config.FEATURES_DIR / f"{stem}_utterance_features.csv"
-    pitch_csv = config.PITCH_DIR / f"{stem}_pitch.csv"
-    if features_csv.exists() and pitch_csv.exists():
-        print(f"  [skip] features + pitch already exist: {features_csv.name}")
+    if features_csv.exists():
+        print(f"  [skip] features already exist: {features_csv.name}")
         return
     t_start = time.time()
     sr = config.FEATURES_SR
@@ -131,23 +126,6 @@ def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
         shm_speech.close(); shm_speech.unlink()
         shm_crowd.close(); shm_crowd.unlink()
     rows.sort(key=lambda r: r.pop("seg_idx"))
-
-    # sequential features
-    similarity = similarity_to_previous([r.pop("_profile") for r in rows])
-    pitch_frames = []
-    for r, sim in zip(rows, similarity):
-        r[f"{config.SPEECH_PREFIX}spectral_similarity_prev"] = sim
-        t, f0, voiced_prob = r.pop("_pitch")
-        if len(t):
-            pitch_frames.append(pd.DataFrame({
-                "seg_start": r["start"], "seg_end": r["end"], "speaker": r["speaker"],
-                "sentence_end": r["sentence_end"], "t": np.round(t, 4),
-                "f0_hz": np.round(f0, 3), "voiced_prob": np.round(voiced_prob, 4)}))
-
-    config.PITCH_DIR.mkdir(parents=True, exist_ok=True)
-    (pd.concat(pitch_frames, ignore_index=True) if pitch_frames
-     else pd.DataFrame(columns=PITCH_COLUMNS)).to_csv(pitch_csv, index=False)
-    print(f"  [Saved] {pitch_csv.name}")
 
     df = pd.DataFrame(rows)
     df["crowd_energy_rob_lag"] = df["crowd_energy_rob"].shift(1)

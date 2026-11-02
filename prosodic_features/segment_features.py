@@ -12,9 +12,6 @@ import numpy as np
 from prosodic_features import config
 from prosodic_features.features.crowd_gap import crowd_gap
 from prosodic_features.features.opensmile_features import egemaps, ratio_to_file
-from prosodic_features.features.pitch import pyin_pitch
-from prosodic_features.features.spectral_entropy import spectral_entropy
-from prosodic_features.features.spectral_profile import spectral_profile
 from prosodic_features.features.speech_rate import speech_rate
 from prosodic_features.utils import safe_float
 
@@ -32,9 +29,7 @@ def compute_segment_features(task: dict) -> Optional[dict]:
     speech and crowd signals, the whole-file baselines used for the
     "_norm" and crowd_energy ratios, and is_speech (crowd loudness is only
     measured for single-speaker speeches, and not after multi_speaker
-    segments). Returns None for a segment without valid times. The row
-    also carries "_profile" and "_pitch", which the step script removes
-    after using them."""
+    segments). Returns None for a segment without valid times."""
     seg = task["segment"]
     shm_s = shared_memory.SharedMemory(name=task["speech_shm"])
     shm_c = shared_memory.SharedMemory(name=task["crowd_shm"])
@@ -55,7 +50,6 @@ def compute_segment_features(task: dict) -> Optional[dict]:
         speech = egemaps(y_seg, sr)
         for key in config.NORMALIZED_SPEECH_KEYS:
             speech[f"{key}_norm"] = ratio_to_file(speech.get(key), task["file_speech"].get(key))
-        pitch, t, f0, voiced_prob = pyin_pitch(y_seg, sr)
         gap = crowd_gap(y_crowd, sr, end, task["next_start"], task["file_crowd_loudness"],
                         measure_loudness=task["is_speech"] and not multi_speaker)
 
@@ -75,11 +69,7 @@ def compute_segment_features(task: dict) -> Optional[dict]:
             "crowd_energy": _round_or_nan(gap["crowd_energy"], 6),
             "crowd_energy_rob": _round_or_nan(gap["crowd_energy_rob"], 6),
         }
-        row.update(pitch)
-        row.update(spectral_entropy(y_seg, sr))
         row.update(speech)
-        row["_profile"] = spectral_profile(y_seg, sr)
-        row["_pitch"] = (t + i0 / sr, f0, voiced_prob)
         return row
     finally:
         shm_s.close()

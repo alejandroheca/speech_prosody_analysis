@@ -36,7 +36,6 @@ CROWD_DIR       = DATA_DIR / "audio" / "separated" / "noise" / "pass01"     # cr
 DIARIZATION_DIR = DATA_DIR / "derived" / "diarization"                    # step 02 (diarized recordings)
 TRANSCRIPT_DIR  = DATA_DIR / "derived" / "transcripts"                    # step 02
 FEATURES_DIR    = DATA_DIR / "derived" / "features"                       # step 03
-PITCH_DIR       = DATA_DIR / "derived" / "pitch"                          # step 03
 
 DENOISED_PREFIX = "denoised_"   # step 01 output names: denoised_<stem>.flac
 CROWD_PREFIX    = "noise_"      #                       noise_<stem>.flac
@@ -98,17 +97,3 @@ SPEECH_PREFIX = "sp_"           # prefix of the speech-side feature columns
 NORMALIZED_SPEECH_KEYS = [f"{SPEECH_PREFIX}loudness_sma3_amean",
                           f"{SPEECH_PREFIX}loudness_sma3_stddevNorm"]
 CROWD_LOUDNESS_KEY = "loudness_sma3_amean"   # eGeMAPS feature used as crowd loudness
-
-PYIN_FMIN = 65
-PYIN_FMAX = 400
-PYIN_VOICED_PROB_MIN = 0.2      # frames with voiced_prob >= this also count as voiced
-YIN_TAIL_WINDOW_S    = 1.0      # plain-YIN f0 saved for the last second of each segment
-
-SPEC_N_FFT     = 1024
-SPEC_HOP       = 256
-SPEC_ENT_BANDS = 8              # mel bands of the spectral entropy
-
-SPS_FMIN_HZ     = 30            # spectral profile (SPS) on a log-frequency axis
-SPS_FMAX_HZ     = 4000
-SPS_BINS_OCT    = 60
-SPS_SIGMA_CENTS = 10.0
