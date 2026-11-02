@@ -14,8 +14,8 @@ import numpy as np
 import onnxruntime as ort
 import soundfile as sf
 
-from speech_crowd_features import config
-from speech_crowd_features.audio import load_audio_mono
+from prosodic_features import config
+from prosodic_features.audio import load_audio_mono
 
 
 def load_gtcrn_denoiser(model_path: Path) -> Callable[[np.ndarray], np.ndarray]:

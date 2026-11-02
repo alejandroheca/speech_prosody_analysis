@@ -9,14 +9,14 @@ from typing import Optional
 
 import numpy as np
 
-from speech_crowd_features import config
-from speech_crowd_features.features.crowd_gap import crowd_gap
-from speech_crowd_features.features.opensmile_features import egemaps, ratio_to_file
-from speech_crowd_features.features.pitch import pyin_pitch
-from speech_crowd_features.features.spectral_entropy import spectral_entropy
-from speech_crowd_features.features.spectral_profile import spectral_profile
-from speech_crowd_features.features.speech_rate import speech_rate
-from speech_crowd_features.utils import safe_float
+from prosodic_features import config
+from prosodic_features.features.crowd_gap import crowd_gap
+from prosodic_features.features.opensmile_features import egemaps, ratio_to_file
+from prosodic_features.features.pitch import pyin_pitch
+from prosodic_features.features.spectral_entropy import spectral_entropy
+from prosodic_features.features.spectral_profile import spectral_profile
+from prosodic_features.features.speech_rate import speech_rate
+from prosodic_features.utils import safe_float
 
 
 def _round_or_nan(x, digits: int):
@@ -30,7 +30,7 @@ def compute_segment_features(task: dict) -> Optional[dict]:
 
     task also carries the shared-memory names / shapes / dtypes of the
     speech and crowd signals, the whole-file baselines used for the
-    "_norm" and crowd_rms ratios, and is_speech (crowd loudness is only
+    "_norm" and crowd_energy ratios, and is_speech (crowd loudness is only
     measured for single-speaker speeches, and not after multi_speaker
     segments). Returns None for a segment without valid times. The row
     also carries "_profile" and "_pitch", which the step script removes
@@ -72,8 +72,8 @@ def compute_segment_features(task: dict) -> Optional[dict]:
             "sentence_end": 1 if any(w.get("is_sentence_end") for w in words) else 0,
             "gap_duration": _round_or_nan(gap["gap_duration"], 3),
             "gap_duration_rob": _round_or_nan(gap["gap_duration_rob"], 3),
-            "crowd_rms": _round_or_nan(gap["crowd_rms"], 6),
-            "crowd_rms_rob": _round_or_nan(gap["crowd_rms_rob"], 6),
+            "crowd_energy": _round_or_nan(gap["crowd_energy"], 6),
+            "crowd_energy_rob": _round_or_nan(gap["crowd_energy_rob"], 6),
         }
         row.update(pitch)
         row.update(spectral_entropy(y_seg, sr))

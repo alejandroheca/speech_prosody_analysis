@@ -16,10 +16,10 @@ import multiprocessing as mp
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from speech_crowd_features import config
-from speech_crowd_features.audio import find_audio_file
-from speech_crowd_features.metadata import load_recordings
-from speech_crowd_features.separation import init_worker, separate_in_worker
+from prosodic_features import config
+from prosodic_features.audio import find_audio_file
+from prosodic_features.metadata import load_recordings
+from prosodic_features.separation import init_worker, separate_in_worker
 
 
 def main() -> None:

@@ -5,7 +5,7 @@ import librosa
 import numpy as np
 from scipy.stats import entropy
 
-from speech_crowd_features import config
+from prosodic_features import config
 
 
 def spectral_entropy(y: np.ndarray, sr: int) -> dict:

@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import opensmile
 
-from speech_crowd_features import config
+from prosodic_features import config
 
 _SMILE = None   # one openSMILE session per process
 
@@ -46,7 +46,7 @@ def crowd_loudness(y: np.ndarray, sr: int) -> float:
         df = get_smile().process_signal(y.astype(np.float32), sr)
         return float(df.iloc[0][config.CROWD_LOUDNESS_KEY])
     except Exception as e:
-        print(f"         [crowd_rms] error: {e}")
+        print(f"         [crowd_energy] error: {e}")
         return np.nan
 
 

@@ -35,15 +35,15 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from speech_crowd_features import config
-from speech_crowd_features.labels import write_audacity_labels
-from speech_crowd_features.audio import find_audio_file
-from speech_crowd_features.metadata import clean_stem, load_recordings
-from speech_crowd_features.speakers import (assign_word_speakers, load_speaker_turns,
-                                     set_segment_speaker)
-from speech_crowd_features.transcription import (detect_speech_chunks, transcribe_chunk,
-                                          trim_words_to_text)
-from speech_crowd_features.utils import format_hms
+from prosodic_features import config
+from prosodic_features.labels import write_audacity_labels
+from prosodic_features.audio import find_audio_file
+from prosodic_features.metadata import clean_stem, load_recordings
+from prosodic_features.speakers import (assign_word_speakers, load_speaker_turns,
+                                 set_segment_speaker)
+from prosodic_features.transcription import (detect_speech_chunks, transcribe_chunk,
+                                      trim_words_to_text)
+from prosodic_features.utils import format_hms
 
 
 def _speaker_label(item: dict) -> str:
@@ -55,7 +55,7 @@ def diarize_if_missing(audio_path: Path, diarizer: dict) -> None:
     The pipeline is loaded on first use and kept in diarizer."""
     if load_speaker_turns(audio_path.stem, config.DIARIZATION_DIR) is not None:
         return
-    from speech_crowd_features.diarization import diarize_file, load_diarization_pipeline
+    from prosodic_features.diarization import diarize_file, load_diarization_pipeline
 
     if "pipeline" not in diarizer:
         token = os.getenv("HF_TOKEN")

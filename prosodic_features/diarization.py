@@ -11,7 +11,7 @@ from typing import Any
 import soundfile as sf
 import torch
 
-from speech_crowd_features import config
+from prosodic_features import config
 
 
 def load_diarization_pipeline(hf_token: str):

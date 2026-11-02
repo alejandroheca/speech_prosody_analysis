@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from speech_crowd_features import config
-from speech_crowd_features.features.opensmile_features import crowd_loudness, ratio_to_file
+from prosodic_features import config
+from prosodic_features.features.opensmile_features import crowd_loudness, ratio_to_file
 
 
 def crowd_gap(y_crowd: np.ndarray, sr: int, gap_start: float, gap_end: float,
@@ -18,7 +18,7 @@ def crowd_gap(y_crowd: np.ndarray, sr: int, gap_start: float, gap_end: float,
     count as crowd. Loudness is NaN unless measure_loudness (False for
     interviews, whose gaps are another speaker's turn, not a crowd)."""
     nan = {"gap_duration": np.nan, "gap_duration_rob": np.nan, "reaction_end": np.nan,
-           "crowd_rms": np.nan, "crowd_rms_rob": np.nan}
+           "crowd_energy": np.nan, "crowd_energy_rob": np.nan}
     if gap_start is None or gap_end is None or gap_end <= gap_start:
         return nan
 
@@ -31,10 +31,10 @@ def crowd_gap(y_crowd: np.ndarray, sr: int, gap_start: float, gap_end: float,
     out = {"gap_duration": gap_end - gap_start,
            "gap_duration_rob": (i_rob_end - i_rob_start) / sr,
            "reaction_end": gap_end,
-           "crowd_rms": np.nan, "crowd_rms_rob": np.nan}
+           "crowd_energy": np.nan, "crowd_energy_rob": np.nan}
     if measure_loudness:
-        out["crowd_rms"] = ratio_to_file(crowd_loudness(y_crowd[i_start:i_end], sr),
+        out["crowd_energy"] = ratio_to_file(crowd_loudness(y_crowd[i_start:i_end], sr),
                                          file_crowd_loudness)
-        out["crowd_rms_rob"] = ratio_to_file(crowd_loudness(y_crowd[i_rob_start:i_rob_end], sr),
+        out["crowd_energy_rob"] = ratio_to_file(crowd_loudness(y_crowd[i_rob_start:i_rob_end], sr),
                                              file_crowd_loudness)
     return out

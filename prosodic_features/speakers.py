@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from speech_crowd_features import config
+from prosodic_features import config
 
 
 def load_speaker_turns(stem: str, diarization_dir: Path) -> list[dict] | None:

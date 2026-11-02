@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from speech_crowd_features.utils import safe_float
+from prosodic_features.utils import safe_float
 
 
 def write_audacity_labels(path: Path, labels: list[tuple[float, float, str]]) -> None:

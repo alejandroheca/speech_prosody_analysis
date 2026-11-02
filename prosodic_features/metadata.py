@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from speech_crowd_features import config
+from prosodic_features import config
 
 
 @dataclass
@@ -45,7 +45,7 @@ def load_recordings(path: Path = config.AUDIO_METADATA) -> list[Recording]:
     listed twice is an error."""
     if not path.exists():
         raise FileNotFoundError(f"Metadata file not found: {path} (set AUDIO_METADATA "
-                                "in speech_crowd_features/config.py)")
+                                "in prosodic_features/config.py)")
     if path.suffix.lower() in (".xlsx", ".xls"):
         df = pd.read_excel(path, dtype=str)
     else:

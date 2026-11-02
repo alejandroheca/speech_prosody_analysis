@@ -13,7 +13,7 @@ For each recording in config.AUDIO_METADATA with a step-02 transcript:
      gap after it (duration; crowd loudness relative to the whole file,
      only for recordings with crowd features, see metadata.py).
   3. Per segment, sequential: spectral similarity to the previous segment
-     and the crowd loudness of the previous gap (crowd_rms_rob_lag; for the
+     and the crowd loudness of the previous gap (crowd_energy_rob_lag; for the
      first segment, the crowd before the speech starts).
   4. The metadata columns in METADATA_COPY_COLUMNS are added to every row.
 
@@ -34,16 +34,16 @@ import librosa
 import numpy as np
 import pandas as pd
 
-from speech_crowd_features import config
-from speech_crowd_features.audio import find_audio_file
-from speech_crowd_features.features.opensmile_features import crowd_loudness, egemaps, ratio_to_file
-from speech_crowd_features.features.spectral_profile import similarity_to_previous
-from speech_crowd_features.labels import read_silero_chunks
-from speech_crowd_features.metadata import Recording, load_recordings
-from speech_crowd_features.segment_features import compute_segment_features
-from speech_crowd_features.segments import (flatten_words, merge_same_speaker_segments,
-                                     split_chunks_by_speaker)
-from speech_crowd_features.utils import format_hms
+from prosodic_features import config
+from prosodic_features.audio import find_audio_file
+from prosodic_features.features.opensmile_features import crowd_loudness, egemaps, ratio_to_file
+from prosodic_features.features.spectral_profile import similarity_to_previous
+from prosodic_features.labels import read_silero_chunks
+from prosodic_features.metadata import Recording, load_recordings
+from prosodic_features.segment_features import compute_segment_features
+from prosodic_features.segments import (flatten_words, merge_same_speaker_segments,
+                                 split_chunks_by_speaker)
+from prosodic_features.utils import format_hms
 
 PITCH_COLUMNS = ["seg_start", "seg_end", "speaker", "sentence_end", "t", "f0_hz", "voiced_prob"]
 
@@ -150,8 +150,8 @@ def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
     print(f"  [Saved] {pitch_csv.name}")
 
     df = pd.DataFrame(rows)
-    df["crowd_rms_rob_lag"] = df["crowd_rms_rob"].shift(1)
-    df.loc[df.index[0], "crowd_rms_rob_lag"] = pre_speech_crowd
+    df["crowd_energy_rob_lag"] = df["crowd_energy_rob"].shift(1)
+    df.loc[df.index[0], "crowd_energy_rob_lag"] = pre_speech_crowd
     for sheet_col, csv_col in config.METADATA_COPY_COLUMNS.items():
         df[csv_col] = rec.row.get(sheet_col, "")
     df.to_csv(features_csv, index=False)

@@ -1,8 +1,8 @@
 """Step 03: speaker-homogeneous segments from the Silero chunks and words."""
 from __future__ import annotations
 
-from speech_crowd_features import config
-from speech_crowd_features.utils import safe_float
+from prosodic_features import config
+from prosodic_features.utils import safe_float
 
 
 def flatten_words(transcript: dict) -> list[dict]:

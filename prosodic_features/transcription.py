@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from speech_crowd_features import config
-from speech_crowd_features.utils import safe_float
+from prosodic_features import config
+from prosodic_features.utils import safe_float
 
 
 def detect_speech_chunks(audio_path: Path, vad_model):

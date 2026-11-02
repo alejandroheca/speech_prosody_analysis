@@ -1,15 +1,24 @@
 # Speech and crowd-reaction features
 
-Acoustic features of speakers and of their audience's reactions in speech
-audio: speeches, sermons, interviews, and debates. This is one of two parallel
-repositories of the same project, to be used together with the crowd-reaction
-classifier in
+Utterance-level acoustic features of speech recordings: speeches, sermons,
+interviews, and debates. This is one of two parallel repositories of the same
+project, to be used together with the crowd-reaction classifier in
 [chymaera96/crowd_reaction_analysis](https://github.com/chymaera96/crowd_reaction_analysis).
 
-For every recording, the pipeline separates the speaker's voice from the crowd,
-transcribes the speech word by word (labelling who speaks when in multi-speaker
-recordings), and computes, for every speech segment, voice features of the
-segment and the crowd's response in the pause after it.
+The pipeline takes a recording (`.flac` recommended; `.wav` also accepted) and:
+
+1. denoises the speech, separating the speaker's voice from the crowd and
+   background;
+2. transcribes the speech word by word and splits it into utterances, labelling
+   who speaks when in multi-speaker recordings;
+3. computes acoustic features for every utterance (eGeMAPS, pitch, spectral
+   entropy, speech rate) and the duration of the gap after it.
+
+For recordings with an active crowd (`ACTIVE_CROWD = 1`), it also computes a
+simple crowd energy measure in each gap between utterances: the loudness of
+the separated crowd track in the gap, relative to the whole crowd track.
+
+The output is one table per recording, with one row per utterance.
 
 ## Installation
 
@@ -47,10 +56,10 @@ Arrange the data as follows:
 ```
 data/
   recordings.xlsx
-  audio/raw/*.wav
+  audio/raw/*.flac
 ```
 
-Recordings can be `.wav` or `.flac`. The metadata file can be `.xlsx` or
+Recordings can be `.flac` (recommended) or `.wav`. The metadata file can be `.xlsx` or
 `.csv`, with one row per recording. Every step processes the recordings listed
 in it; recordings without audio are reported and skipped. The pipeline only
 reads this file. It uses these columns:
@@ -65,7 +74,7 @@ reads this file. It uses these columns:
 `1`, `yes`, `y`, and `true` count as 1; any other value, including an empty
 cell, counts as 0. Set `CROWD_DATA_DIR` and `CROWD_AUDIO_METADATA` to use
 another data folder or metadata file. Column names and all other paths and
-parameters are in `speech_crowd_features/config.py`.
+parameters are in `prosodic_features/config.py`.
 
 ## Running the pipeline
 
@@ -130,11 +139,11 @@ track to check it by listening.
   from a Silero chunk that contained a speaker change.
 - `gap_duration`, `gap_duration_rob`, `reaction_end`: the gap until the next
   segment. The `_rob` versions leave out 50 ms at each end of the gap.
-- `crowd_rms`, `crowd_rms_rob`: crowd loudness in the gap, relative to the
+- `crowd_energy`, `crowd_energy_rob`: crowd loudness in the gap, relative to the
   loudness of the whole crowd track (eGeMAPS `loudness_sma3_amean`). These are
   computed only when `ACTIVE_CROWD = 1`, and never after a `multi_speaker`
   segment.
-- `crowd_rms_rob_lag`: `crowd_rms_rob` of the previous gap. For the first
+- `crowd_energy_rob_lag`: `crowd_energy_rob` of the previous gap. For the first
   segment, it is the crowd before the speech starts.
 - `pyin_pitch_hz`, `pyin_pitch_hz_sd`, `pyin_voiced_frac`: pitch.
 - `sp_spectral_entropy`, `sp_spectral_entropy_sd`, `sp_spectral_similarity_prev`.
@@ -151,7 +160,7 @@ run_all.sh                                         runs them in order
 envs/                                              Conda environments
 models/                                            GTCRN model (not included)
 data/                                              recordings and outputs (not included)
-speech_crowd_features/
+prosodic_features/
   config.py            paths and parameters
   metadata.py          metadata file
   audio.py, labels.py, utils.py

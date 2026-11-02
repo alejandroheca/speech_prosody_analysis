@@ -5,7 +5,7 @@ from __future__ import annotations
 import librosa
 import numpy as np
 
-from speech_crowd_features import config
+from prosodic_features import config
 
 
 def _log_frequency_bins(sr: int):
