@@ -15,7 +15,9 @@ For each recording in config.AUDIO_METADATA with a step-02 transcript:
   3. Per segment: the crowd loudness of the previous gap
      (crowd_energy_rob_lag; for the first segment, the crowd before the
      speech starts).
-  4. The metadata columns in METADATA_COPY_COLUMNS are added to every row.
+  4. Utterance mean loudness relative to the recording's loudness reference
+     (LOUDNESS_REF_PERCENTILE of the frame loudness of the whole original
+     recording, before separation), saved with the reference itself.
 
 Output (existing outputs are skipped):
   config.FEATURES_DIR/<name>_utterance_features.csv   one row per segment
@@ -34,8 +36,9 @@ import numpy as np
 import pandas as pd
 
 from prosodic_features import config
-from prosodic_features.audio import find_audio_file
-from prosodic_features.features.opensmile_features import crowd_loudness, egemaps, ratio_to_file
+from prosodic_features.audio import find_audio_file, load_audio_mono
+from prosodic_features.features.opensmile_features import (crowd_loudness, loudness_percentile,
+                                                           ratio_to_file)
 from prosodic_features.labels import read_silero_chunks
 from prosodic_features.metadata import Recording, load_recordings
 from prosodic_features.segment_features import compute_segment_features
@@ -69,7 +72,7 @@ def run_segments_in_parallel(tasks: list[dict], t_start: float) -> list[dict]:
     return [r for r in rows if r is not None]
 
 
-def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
+def process_recording(rec: Recording, raw_path: Path, speech_path: Path, crowd_path: Path,
                       chunks_path: Path, transcript_path: Path) -> None:
     stem, is_speech = rec.stem, rec.crowd
     features_csv = config.FEATURES_DIR / f"{stem}_utterance_features.csv"
@@ -82,8 +85,10 @@ def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
     print("  [1/4] Loading audio...")
     y_speech, y_crowd = load_signals(speech_path, crowd_path)
     file_crowd_loudness = crowd_loudness(y_crowd, sr)   # whole-file baselines
-    file_speech = egemaps(y_speech, sr)
+    q = config.LOUDNESS_REF_PERCENTILE
+    loudness_ref = loudness_percentile(load_audio_mono(raw_path, sr)[0], sr, q)
     print(f"         Crowd loudness (file): {file_crowd_loudness:.4f} | "
+          f"Original loudness p{q} (file): {loudness_ref:.4f} | "
           f"Workers: {config.FEATURES_N_WORKERS}")
 
     print("  [2/4] Building speaker-homogeneous segments from Silero chunks...")
@@ -116,7 +121,7 @@ def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
         tasks = [{
             "seg_idx": i, "segment": seg,
             "next_start": segments[i + 1].get("start") if i + 1 < len(segments) else audio_end,
-            "file_crowd_loudness": file_crowd_loudness, "file_speech": file_speech,
+            "file_crowd_loudness": file_crowd_loudness,
             "is_speech": is_speech,
             "speech_shm": shm_speech.name, "crowd_shm": shm_crowd.name,
             "shape": y_speech.shape, "dtype": y_speech.dtype,
@@ -130,8 +135,9 @@ def process_recording(rec: Recording, speech_path: Path, crowd_path: Path,
     df = pd.DataFrame(rows)
     df["crowd_energy_rob_lag"] = df["crowd_energy_rob"].shift(1)
     df.loc[df.index[0], "crowd_energy_rob_lag"] = pre_speech_crowd
-    for sheet_col, csv_col in config.METADATA_COPY_COLUMNS.items():
-        df[csv_col] = rec.row.get(sheet_col, "")
+    loudness_col = f"{config.SPEECH_PREFIX}loudness_sma3_amean"
+    df[f"rec_loudness_p{q}"] = loudness_ref
+    df[f"{loudness_col}_rel"] = [ratio_to_file(v, loudness_ref) for v in df[loudness_col]]
     df.to_csv(features_csv, index=False)
     print(f"  [Saved] {features_csv.name} ({len(df)} rows, {len(df.columns)} cols)")
     print(f"  [Done]  {format_hms(time.time() - t_start)}")
@@ -148,13 +154,14 @@ def main() -> None:
         chunks = config.TRANSCRIPT_DIR / f"{rec.stem}_silero_chunks.txt"
         speech = find_audio_file(config.DENOISED_DIR, config.DENOISED_PREFIX, rec.stem)
         crowd = find_audio_file(config.CROWD_DIR, config.CROWD_PREFIX, rec.stem)
+        raw = find_audio_file(config.RAW_AUDIO_DIR, "", rec.stem)
         print(f"\n[{i}/{len(recordings)}] {rec.stem}  (crowd features={rec.crowd})")
-        missing = [p.name for p in (transcript, chunks, speech, crowd) if not p.exists()]
+        missing = [p.name for p in (transcript, chunks, speech, crowd, raw) if not p.exists()]
         if missing:
             print(f"  [skip] not found: {', '.join(missing)}")
             continue
         try:
-            process_recording(rec, speech, crowd, chunks, transcript)
+            process_recording(rec, raw, speech, crowd, chunks, transcript)
         except Exception as e:
             print(f"  [ERROR] {e}")
     print(f"\n[Batch Done] {len(recordings)} recordings | Total: {format_hms(time.time() - t_batch)}")

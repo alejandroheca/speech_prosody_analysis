@@ -11,7 +11,7 @@ import numpy as np
 
 from prosodic_features import config
 from prosodic_features.features.crowd_gap import crowd_gap
-from prosodic_features.features.opensmile_features import egemaps, ratio_to_file
+from prosodic_features.features.opensmile_features import egemaps
 from prosodic_features.features.speech_rate import speech_rate
 from prosodic_features.utils import safe_float
 
@@ -26,8 +26,8 @@ def compute_segment_features(task: dict) -> Optional[dict]:
     task["next_start"]).
 
     task also carries the shared-memory names / shapes / dtypes of the
-    speech and crowd signals, the whole-file baselines used for the
-    "_norm" and crowd_energy ratios, and is_speech (crowd loudness is only
+    speech and crowd signals, the whole-file crowd loudness used for the
+    crowd_energy ratios, and is_speech (crowd loudness is only
     measured for single-speaker speeches, and not after multi_speaker
     segments). Returns None for a segment without valid times."""
     seg = task["segment"]
@@ -48,8 +48,6 @@ def compute_segment_features(task: dict) -> Optional[dict]:
         y_seg = y_speech[i0:min(len(y_speech), int(end * sr))].copy()
 
         speech = egemaps(y_seg, sr)
-        for key in config.NORMALIZED_SPEECH_KEYS:
-            speech[f"{key}_norm"] = ratio_to_file(speech.get(key), task["file_speech"].get(key))
         gap = crowd_gap(y_crowd, sr, end, task["next_start"], task["file_crowd_loudness"],
                         measure_loudness=task["is_speech"] and not multi_speaker)
 

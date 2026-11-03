@@ -10,7 +10,8 @@ import opensmile
 
 from prosodic_features import config
 
-_SMILE = None   # one openSMILE session per process
+_SMILE = None       # one openSMILE session per process
+_SMILE_LLD = None   # frame-level (LLD) session, only used in the main process
 
 
 def get_smile() -> "opensmile.Smile":
@@ -20,6 +21,21 @@ def get_smile() -> "opensmile.Smile":
         _SMILE = opensmile.Smile(feature_set=opensmile.FeatureSet.eGeMAPSv02,
                                  feature_level=opensmile.FeatureLevel.Functionals)
     return _SMILE
+
+
+def loudness_percentile(y: np.ndarray, sr: int, q: float) -> float:
+    """The q-th percentile of the frame-level eGeMAPS loudness of y (10 ms
+    frames); NaN if openSMILE fails."""
+    global _SMILE_LLD
+    if _SMILE_LLD is None:
+        _SMILE_LLD = opensmile.Smile(feature_set=opensmile.FeatureSet.eGeMAPSv02,
+                                     feature_level=opensmile.FeatureLevel.LowLevelDescriptors)
+    try:
+        frames = _SMILE_LLD.process_signal(y.astype(np.float32), sr)[config.LOUDNESS_LLD_KEY]
+        return float(np.percentile(frames.to_numpy(), q))
+    except Exception as e:
+        print(f"         [loudness_percentile] error: {e}")
+        return np.nan
 
 
 def egemaps(y: np.ndarray, sr: int) -> dict:

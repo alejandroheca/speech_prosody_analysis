@@ -70,7 +70,6 @@ reads this file. It uses these columns:
 | `FILENAME` | e.g. `mlk_1963_dream.wav` | all | Audio file name in `data/audio/raw/`. The name without extension names every output. |
 | `DIARIZATION_NEEDED` | 1 / 0 | 2 | 1: several people speak (interview, debate, Q&A). The recording is diarized, and each word gets the speaker whose turn overlaps it most. 0: every word gets `SPEAKER_00`. |
 | `ACTIVE_CROWD` | 1 / 0 | 3 | 1: an audience reacts to the speaker, so crowd loudness is measured in the gaps between segments. 0: the gaps contain other speakers or silence, and the crowd columns stay empty. |
-| `Year`, `Type` | any | 3 | Optional. Copied into the features table as `year` and `type`. |
 
 `1`, `yes`, `y`, and `true` count as 1; any other value, including an empty
 cell, counts as 0. Set `CROWD_DATA_DIR` and `CROWD_AUDIO_METADATA` to use
@@ -145,10 +144,13 @@ track to check it by listening.
   segment.
 - `crowd_energy_rob_lag`: `crowd_energy_rob` of the previous gap. For the first
   segment, it is the crowd before the speech starts.
-- `sp_<eGeMAPS feature>`: the 88 eGeMAPS v02 functionals, plus
-  `sp_loudness_sma3_amean_norm` and `sp_loudness_sma3_stddevNorm_norm`,
-  relative to the whole recording.
-- `year`, `type`: from the metadata file.
+- `sp_<eGeMAPS feature>`: the 88 eGeMAPS v02 functionals. They are not
+  normalized, so loudness and energy features depend on each recording's gain.
+- `rec_loudness_p99`: the recording's loudness reference, the 99th percentile
+  of the frame-level eGeMAPS loudness of the whole original recording, before
+  separation (the same value on every row).
+- `sp_loudness_sma3_amean_rel`: `sp_loudness_sma3_amean` divided by
+  `rec_loudness_p99`, comparable across recordings with different gain.
 
 ## Repository structure
 

@@ -26,7 +26,6 @@ class Recording:
     stem: str          # file name without extension: the name of every output
     diarize: bool      # run the diarization pathway in step 02
     crowd: bool        # compute crowd features in step 03
-    row: dict          # the whole metadata row (for METADATA_COPY_COLUMNS)
 
 
 def clean_stem(stem: str) -> str:
@@ -68,7 +67,7 @@ def load_recordings(path: Path = config.AUDIO_METADATA) -> list[Recording]:
         seen.add(stem)
         diarize = is_yes(row[config.METADATA_DIARIZE_COLUMN])
         recordings.append(Recording(stem=stem, diarize=diarize,
-                                    crowd=is_yes(row[config.METADATA_CROWD_COLUMN]), row=row))
+                                    crowd=is_yes(row[config.METADATA_CROWD_COLUMN])))
     print(f"[meta] {len(recordings)} recordings in {path.name} "
           f"({sum(r.diarize for r in recordings)} to diarize, "
           f"{sum(r.crowd for r in recordings)} with crowd features)")

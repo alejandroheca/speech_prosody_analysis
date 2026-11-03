@@ -27,8 +27,6 @@ AUDIO_METADATA = Path(os.environ.get("CROWD_AUDIO_METADATA", DATA_DIR / "recordi
 METADATA_FILENAME_COLUMN = "FILENAME"             # audio file name, e.g. mlk_1963_dream.wav
 METADATA_DIARIZE_COLUMN  = "DIARIZATION_NEEDED"   # 1 / 0: diarize (step 02)
 METADATA_CROWD_COLUMN    = "ACTIVE_CROWD"         # 1 / 0: measure crowd loudness (step 03)
-# metadata columns copied into every row of the features CSV {sheet column: CSV column}
-METADATA_COPY_COLUMNS = {"Year": "year", "Type": "type"}
 
 RAW_AUDIO_DIR   = DATA_DIR / "audio" / "raw"                              # input of step 01
 DENOISED_DIR    = DATA_DIR / "audio" / "separated" / "denoised" / "pass01"  # speech (step 01)
@@ -71,7 +69,7 @@ SILERO_THRESHOLD = 0.40
 SILERO_MIN_SPEECH_MS  = 500
 SILERO_MIN_SILENCE_MS = 50
 
-WHISPER_MODEL        = "medium"
+WHISPER_MODEL        = "large-v3"
 WHISPER_DEVICE       = "cpu"
 WHISPER_COMPUTE_TYPE = "int8"
 WHISPER_LANGUAGE     = "en"
@@ -92,8 +90,12 @@ REVERB_LAG_S        = 0.05      # trimmed from both ends of a gap for the *_rob 
 MIN_SEGMENT_S       = 0.25      # shorter segments get NaN openSMILE features
 
 SPEECH_PREFIX = "sp_"           # prefix of the speech-side feature columns
-
-# loudness columns that also get a "_norm" column (segment / whole file)
-NORMALIZED_SPEECH_KEYS = [f"{SPEECH_PREFIX}loudness_sma3_amean",
-                          f"{SPEECH_PREFIX}loudness_sma3_stddevNorm"]
 CROWD_LOUDNESS_KEY = "loudness_sma3_amean"   # eGeMAPS feature used as crowd loudness
+
+# Recording-level loudness reference: this percentile of the frame-level
+# eGeMAPS loudness (LLD) of the whole original recording (before separation). Utterance mean loudness
+# is divided by it, so loudness is comparable across recordings with
+# different gain. A high percentile rather than the max, so a single spike
+# (a shout, a residual noise burst) does not set the scale.
+LOUDNESS_LLD_KEY       = "Loudness_sma3"
+LOUDNESS_REF_PERCENTILE = 99
