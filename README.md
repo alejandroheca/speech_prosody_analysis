@@ -60,6 +60,12 @@ data/
   audio/raw/*.flac
 ```
 
+Name each recording with the speaker's identifier as a prefix, followed by an
+underscore: `shelton_1965_kkk_meeting.wav`, `mlk_1963_dream.wav`. The prefix
+(everything before the first `_`) is the speaker's name in the transcripts and
+the features table: every word of a single-speaker recording gets it, and so
+does the target speaker of a diarized recording (see the speaker marks below).
+
 Recordings can be `.flac` (recommended) or `.wav`. The metadata file can be `.xlsx` or
 `.csv`, with one row per recording. Every step processes the recordings listed
 in it; recordings without audio are reported and skipped. The pipeline only
@@ -67,13 +73,15 @@ reads this file. It uses these columns:
 
 | Column | Values | Step | Meaning |
 |---|---|---|---|
-| `FILENAME` | e.g. `mlk_1963_dream.wav` | all | Audio file name in `data/audio/raw/`. The name without extension names every output. |
-| `DIARIZATION_NEEDED` | 1 / 0 | 2 | 1: several people speak (interview, debate, Q&A). The recording is diarized, and each word gets the speaker whose turn overlaps it most. 0: every word gets `SPEAKER_00`. |
+| `FILENAME` | e.g. `mlk_1963_dream.wav` | all | Audio file name in `data/audio/raw/`. The name without extension names every output; its prefix up to the first `_` is the speaker's name. |
+| `DIARIZATION_NEEDED` | 1 / 0 | 2 | 1: several people speak (interview, debate, Q&A). The recording is diarized, and each word gets the speaker whose turn overlaps it most (`SPEAKER_00`, `SPEAKER_01`, ...). 0: every word gets the speaker's name from the file name. |
 | `ACTIVE_CROWD` | 1 / 0 | 3 | 1: an audience reacts to the speaker, so crowd loudness is measured in the gaps between segments. 0: the gaps contain other speakers or silence, and the crowd columns stay empty. |
+| `ONSET_S1`, `OFFSET_S1`, `ONSET_S2`, `OFFSET_S2` | seconds | 2 | Optional, for diarized recordings. One or two stretches where only the target speaker talks. The diarization speaker that talks most within them gets the speaker's name from the file name; the other voices keep their `SPEAKER_xx` labels. Leave both cells of a pair empty if unused. |
 
 `1`, `yes`, `y`, and `true` count as 1; any other value, including an empty
-cell, counts as 0. Set `CROWD_DATA_DIR` and `CROWD_AUDIO_METADATA` to use
-another data folder or metadata file. Column names and all other paths and
+cell, counts as 0. See `data/README.md` for how to choose the speaker marks.
+Set `CROWD_DATA_DIR` and `CROWD_AUDIO_METADATA` to use another data folder or
+metadata file. Column names and all other paths and
 parameters are in `prosodic_features/config.py`.
 
 ## Running the pipeline
@@ -98,7 +106,7 @@ python 03_features.py
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
-| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns each chunk (WhisperX), and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote). |
+| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns each chunk (WhisperX), and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is named from the `SPEAKER` marks. |
 | 3 | `03_features.py` | Builds single-speaker segments and computes, per segment, eGeMAPS (openSMILE), speech rate, and the duration and crowd loudness of the following gap. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
@@ -127,7 +135,8 @@ data/
 
 Diarization files exist only for diarized recordings. The label tracks are
 `_silero_chunks.txt` (speech chunks), `_words.txt` and `_words_original.txt`
-(words after and before removing stray hallucinated edge words), and
+(words after and before the edge-word check: stray hallucinated edge words
+removed, and a sentence's first and last word kept inside its Silero chunk), and
 `_sentences.txt`. Load the separated audio in Audacity, then import a label
 track to check it by listening.
 
@@ -165,7 +174,7 @@ prosodic_features/
   metadata.py          metadata file
   audio.py, labels.py, utils.py
   separation.py        step 1
-  transcription.py     step 2: VAD, WhisperX, stray-word trimming
+  transcription.py     step 2: VAD, WhisperX, edge-word check
   diarization.py       step 2: pyannote
   speakers.py          step 2: speaker of each word and sentence
   segments.py          step 3: segments from chunks and words
