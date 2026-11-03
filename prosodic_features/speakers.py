@@ -33,6 +33,27 @@ def load_speaker_turns(stem: str, diarization_dir: Path) -> list[dict] | None:
     return None
 
 
+def identify_target_speaker(turns: list[dict], marks: list[tuple[float, float]]
+                            ) -> tuple[str | None, dict[str, float]]:
+    """The diarization speaker that talks the most inside the marks (the
+    stretches where the target speaker talks), and the seconds each speaker
+    talks inside them: (speaker or None, {speaker: seconds})."""
+    talk: dict[str, float] = {}
+    for on, off in marks:
+        for turn in turns:
+            overlap = min(off, turn["end"]) - max(on, turn["start"])
+            if overlap > 0:
+                talk[turn["speaker"]] = talk.get(turn["speaker"], 0.0) + overlap
+    return (max(talk, key=lambda s: talk[s]) if talk else None), talk
+
+
+def rename_speaker(turns: list[dict], old: str, new: str) -> None:
+    """Rename speaker old to new in turns, IN PLACE."""
+    for turn in turns:
+        if turn["speaker"] == old:
+            turn["speaker"] = new
+
+
 def _speaker_with_most_overlap(start: float, end: float, turns: list[dict]) -> str | None:
     """Speaker whose turn overlaps [start, end] the most (None if none does)."""
     best_speaker, best_overlap = None, 0.0

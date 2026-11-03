@@ -106,7 +106,7 @@ python 03_features.py
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
-| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns each chunk (WhisperX), and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is named from the `SPEAKER` marks. |
+| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns each chunk (WhisperX), and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
 | 3 | `03_features.py` | Builds single-speaker segments and computes, per segment, eGeMAPS (openSMILE), speech rate, and the duration and crowd loudness of the following gap. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
@@ -134,10 +134,12 @@ data/
 ```
 
 Diarization files exist only for diarized recordings. The label tracks are
-`_silero_chunks.txt` (speech chunks), `_words.txt` and `_words_original.txt`
+`_silero_chunks.txt` (speech chunks; chunks less than `SILERO_MERGE_GAP_S` =
+0.05 s apart are joined), `_words.txt` and `_words_original.txt`
 (words after and before the edge-word check: stray hallucinated edge words
 removed, and a sentence's first and last word kept inside its Silero chunk), and
-`_sentences.txt`. Load the separated audio in Audacity, then import a label
+`_sentences.txt` (the first sentence of each chunk starts at the chunk's start,
+the last one ends at the chunk's end). Load the separated audio in Audacity, then import a label
 track to check it by listening.
 
 `<name>_utterance_features.csv` contains:

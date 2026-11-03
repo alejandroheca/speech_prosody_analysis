@@ -27,6 +27,10 @@ AUDIO_METADATA = Path(os.environ.get("CROWD_AUDIO_METADATA", DATA_DIR / "recordi
 METADATA_FILENAME_COLUMN = "FILENAME"             # audio file name, e.g. mlk_1963_dream.wav
 METADATA_DIARIZE_COLUMN  = "DIARIZATION_NEEDED"   # 1 / 0: diarize (step 02)
 METADATA_CROWD_COLUMN    = "ACTIVE_CROWD"         # 1 / 0: measure crowd loudness (step 03)
+# Optional, for diarized recordings: stretches (onset, offset in seconds)
+# where only the target speaker talks. The diarization speaker that talks most
+# within them gets the target speaker's name (step 02; see metadata.speaker_name).
+METADATA_MARK_COLUMNS    = [("ONSET_S1", "OFFSET_S1"), ("ONSET_S2", "OFFSET_S2")]
 
 RAW_AUDIO_DIR   = DATA_DIR / "audio" / "raw"                              # input of step 01
 DENOISED_DIR    = DATA_DIR / "audio" / "separated" / "denoised" / "pass01"  # speech (step 01)
@@ -38,7 +42,7 @@ FEATURES_DIR    = DATA_DIR / "derived" / "features"                       # step
 DENOISED_PREFIX = "denoised_"   # step 01 output names: denoised_<stem>.flac
 CROWD_PREFIX    = "noise_"      #                       noise_<stem>.flac
 
-DEFAULT_SPEAKER = "SPEAKER_00"  # speaker label of single-speaker recordings
+DEFAULT_SPEAKER = "SPEAKER_00"  # step 03: label of words without a speaker (outside every diarization turn)
 
 # ---------------------------------------------------------------------------
 # Step 01: speech / crowd separation (GTCRN denoiser, 16 kHz)
@@ -68,6 +72,7 @@ SILERO_SR        = 16000
 SILERO_THRESHOLD = 0.40
 SILERO_MIN_SPEECH_MS  = 500
 SILERO_MIN_SILENCE_MS = 50
+SILERO_MERGE_GAP_S    = 0.05    # chunks closer than this (s) are joined into one
 
 WHISPER_MODEL        = "large-v3"
 WHISPER_DEVICE       = "cpu"
@@ -75,7 +80,7 @@ WHISPER_COMPUTE_TYPE = "int8"
 WHISPER_LANGUAGE     = "en"
 
 TRANSCRIBE_MAX_SECONDS = None   # e.g. 120 to test on the first 2 min; None = full file
-TRIM_WORDS_SLACK = 3            # see transcription.trim_words_to_text
+TRIM_WORDS_SLACK = 3            # see transcription.handle_edge_words
 
 # ---------------------------------------------------------------------------
 # Step 03: acoustic features

@@ -8,12 +8,20 @@ Step 02: speech chunks, words and speakers of every recording.
 For each recording in config.AUDIO_METADATA (its speech file from step 01):
   1. Silero VAD finds the speech chunks.
   2. WhisperX transcribes and word-aligns each chunk on its own.
-  3. Speakers: single-speaker recordings get SPEAKER_00 for every word.
-     Recordings with DIARIZATION_NEEDED = 1 in the metadata are
-     diarized with pyannote (once; the result is saved and reused) and
-     each word gets the speaker whose turn overlaps it the most.
-  4. Stray words at the edges of each WhisperX sentence that are not in
-     its text are dropped (trim_words_to_text).
+  3. Speakers. The target speaker's name is the file name's prefix (up to
+     the first underscore, e.g. "shelton"). Single-speaker recordings get
+     it for every word. Recordings with DIARIZATION_NEEDED = 1 in the
+     metadata are diarized with pyannote (once; the result is saved and
+     reused) and each word gets the speaker whose turn overlaps it the
+     most; if the metadata marks stretches where only the target speaker
+     talks (ONSET_S1/OFFSET_S1, ONSET_S2/OFFSET_S2), the diarization
+     speaker that talks most within them gets the target's name, and the
+     others keep their SPEAKER_xx labels.
+  4. Edge words of each WhisperX sentence (handle_edge_words): stray words
+     that are not in its text are dropped, and a first / last word that
+     crosses its Silero chunk is moved inside it. Sentence times follow
+     their words, except that the first sentence of each chunk starts at
+     the chunk's start and the last one ends at the chunk's end.
 
 Outputs, per recording (config.TRANSCRIPT_DIR; recordings with a JSON are
 skipped):
@@ -38,11 +46,11 @@ import torch
 from prosodic_features import config
 from prosodic_features.labels import write_audacity_labels
 from prosodic_features.audio import find_audio_file
-from prosodic_features.metadata import clean_stem, load_recordings
-from prosodic_features.speakers import (assign_word_speakers, load_speaker_turns,
-                                 set_segment_speaker)
-from prosodic_features.transcription import (detect_speech_chunks, transcribe_chunk,
-                                      trim_words_to_text)
+from prosodic_features.metadata import Recording, clean_stem, load_recordings
+from prosodic_features.speakers import (assign_word_speakers, identify_target_speaker,
+                                 load_speaker_turns, rename_speaker, set_segment_speaker)
+from prosodic_features.transcription import (detect_speech_chunks, handle_edge_words,
+                                      transcribe_chunk)
 from prosodic_features.utils import format_hms
 
 
@@ -69,7 +77,8 @@ def diarize_if_missing(audio_path: Path, diarizer: dict) -> None:
         out_rttm=config.DIARIZATION_DIR / f"{audio_path.stem}.rttm")
 
 
-def transcribe_recording(audio_path: Path, models: dict, is_diarized: bool) -> None:
+def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None:
+    is_diarized = rec.diarize
     stem = clean_stem(audio_path.stem)
     out = {name: config.TRANSCRIPT_DIR / f"{stem}{suffix}" for name, suffix in (
         ("json", ".json"), ("chunks", "_silero_chunks.txt"), ("words", "_words.txt"),
@@ -94,32 +103,55 @@ def transcribe_recording(audio_path: Path, models: dict, is_diarized: bool) -> N
     for i, c in enumerate(chunks):
         piece = audio[int(c["start"] * config.SILERO_SR):int(c["end"] * config.SILERO_SR)]
         piece = piece.numpy() if isinstance(piece, torch.Tensor) else np.array(piece)
-        sentences += transcribe_chunk(piece, c["start"], models["whisper"],
-                                      models["align"], models["align_meta"])
+        for s in transcribe_chunk(piece, c["start"], models["whisper"],
+                                  models["align"], models["align_meta"]):
+            s["chunk"] = i      # index of the sentence's Silero chunk
+            sentences.append(s)
         if (i + 1) % 20 == 0 or i + 1 == len(chunks):
             print(f"         {i + 1}/{len(chunks)} chunks transcribed", flush=True)
     words_original = [w for s in sentences for w in s["words"]]
 
-    # 3. speakers, on all words (trimming below keeps these same word objects)
+    # 3. speakers, on all words (step 4 keeps these word objects, or copies them)
+    target = None       # target speaker identified from the metadata marks
     if not is_diarized:
-        assign_word_speakers(words_original, turns=None, constant=config.DEFAULT_SPEAKER)
-        speaker_source, diarized = config.DEFAULT_SPEAKER, False
+        assign_word_speakers(words_original, turns=None, constant=rec.speaker)
+        speaker_source, diarized = rec.speaker, False
     else:
         diarize_if_missing(audio_path, models["diarizer"])
         turns = load_speaker_turns(audio_path.stem, config.DIARIZATION_DIR)
-        assign_word_speakers(words_original, turns=turns, constant=None)
         speaker_source = f"pyannote ({len({t['speaker'] for t in turns})} speakers)"
+        if rec.marks:
+            label, talk = identify_target_speaker(turns, rec.marks)
+            marked = sum(off - on for on, off in rec.marks)
+            target = {"name": rec.speaker, "diarization_speaker": label,
+                      "marks": rec.marks, "marked_s": round(marked, 3),
+                      "talk_in_marks_s": {k: round(v, 3) for k, v in talk.items()}}
+            if label is None:
+                print(f"  [speaker] WARNING: no diarization speaker talks in the marks of {rec.speaker}")
+            else:
+                rename_speaker(turns, label, rec.speaker)
+                speaker_source += (f"; {label} = {rec.speaker} (talks {talk[label]:.1f} s "
+                                   f"of the {marked:.1f} s marked)")
+        assign_word_speakers(words_original, turns=turns, constant=None)
         diarized = True
     print(f"  [speaker] {speaker_source}")
 
-    # 4. drop stray edge words; sentence times follow the words that remain
+    # 4. edge words: drop stray ones, move chunk-crossing ones inside the chunk;
+    #    sentence times follow the words that remain
     words: list[dict] = []
     for s in sentences:
-        s["words"] = trim_words_to_text(s["text"], s["words"])
+        c = chunks[s["chunk"]]
+        s["words"] = handle_edge_words(s["text"], s["words"], c["start"], c["end"])
         if s["words"]:
             s["start"], s["end"] = s["words"][0]["start"], s["words"][-1]["end"]
         set_segment_speaker(s)
         words += s["words"]
+    # the first sentence of each chunk starts at the chunk's start, the last
+    # one ends at the chunk's end (word times are not changed)
+    for i, c in enumerate(chunks):
+        in_chunk = [s for s in sentences if s["chunk"] == i and s["words"]]
+        if in_chunk:
+            in_chunk[0]["start"], in_chunk[-1]["end"] = c["start"], c["end"]
 
     out["json"].write_text(json.dumps({
         "audio_path": str(audio_path),
@@ -131,7 +163,8 @@ def transcribe_recording(audio_path: Path, models: dict, is_diarized: bool) -> N
         "n_silero_chunks": len(chunks),
         "needs_diarization": is_diarized,
         "diarized": diarized,
-        "segments": sentences,   # [{start, end, text, words: [{start, end, word, speaker}], speaker, speaker_pure}]
+        "target_speaker": target,
+        "segments": sentences,   # [{start, end, text, words: [{start, end, word, speaker}], chunk, speaker, speaker_pure}]
     }, indent=2), encoding="utf-8")
     write_audacity_labels(out["words"], [
         (w["start"], w["end"], w["word"] + _speaker_label(w)) for w in words])
@@ -154,10 +187,10 @@ def main() -> None:
     for rec in load_recordings():
         path = find_audio_file(config.DENOISED_DIR, config.DENOISED_PREFIX, rec.stem)
         if path.exists():
-            jobs.append((path, rec.diarize))
+            jobs.append((path, rec))
         else:
             print(f"  [missing] no speech file for {rec.stem} in {config.DENOISED_DIR} (run step 01)")
-    print(f"[Batch] {len(jobs)} recordings, {sum(d for _, d in jobs)} to diarize")
+    print(f"[Batch] {len(jobs)} recordings, {sum(r.diarize for _, r in jobs)} to diarize")
     print(f"[Batch] Output dir: {config.TRANSCRIPT_DIR}")
     if config.TRANSCRIBE_MAX_SECONDS is not None:
         print(f"[TEST] Duration cap: first {config.TRANSCRIBE_MAX_SECONDS}s only")
@@ -172,10 +205,10 @@ def main() -> None:
         language_code=config.WHISPER_LANGUAGE, device=config.WHISPER_DEVICE)
 
     t_batch = time.time()
-    for i, (path, diarize) in enumerate(jobs, 1):
+    for i, (path, rec) in enumerate(jobs, 1):
         print(f"\n[{i}/{len(jobs)}] Processing: {path.name}")
         try:
-            transcribe_recording(path, models, diarize)
+            transcribe_recording(path, models, rec)
         except Exception as e:
             print(f"  [ERROR] {path.name}: {e}")
     print(f"\n[Batch Done] {len(jobs)} files | Total: {format_hms(time.time() - t_batch)}")

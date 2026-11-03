@@ -8,12 +8,17 @@ One row per recording. Columns used (names set in config.py):
                             crowd's loudness in the gaps is measured in step 03
                             (0: the gaps are other speakers or silence; the
                             crowd columns are left empty)
+  METADATA_MARK_COLUMNS     optional: onset / offset pairs (seconds) of
+                            stretches where only the target speaker talks;
+                            in diarized recordings they identify which
+                            diarization speaker is the target (step 02)
+The target speaker's name is the file name's prefix (see speaker_name).
 1 is any of 1, yes, y, true (any case); anything else, including an empty
 cell, is 0. The file is only read, never modified.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +31,8 @@ class Recording:
     stem: str          # file name without extension: the name of every output
     diarize: bool      # run the diarization pathway in step 02
     crowd: bool        # compute crowd features in step 03
+    speaker: str       # target speaker's name: the file name's prefix
+    marks: list[tuple[float, float]] = field(default_factory=list)  # target speaker's stretches (s)
 
 
 def clean_stem(stem: str) -> str:
@@ -34,8 +41,30 @@ def clean_stem(stem: str) -> str:
     return stem[len(prefix):] if stem.startswith(prefix) else stem
 
 
+def speaker_name(stem: str) -> str:
+    """The target speaker's name: the file name up to its first underscore,
+    e.g. "shelton" for shelton_1965_kkk_meeting (the whole name if it has
+    no underscore)."""
+    return stem.split("_", 1)[0]
+
+
 def is_yes(value) -> bool:
     return str(value).strip().lower() in {"yes", "y", "true", "1", "1.0"}
+
+
+def read_marks(row: dict, path: Path) -> list[tuple[float, float]]:
+    """The (onset, offset) pairs of METADATA_MARK_COLUMNS filled in this row.
+    A pair with only one value, or with offset <= onset, is an error."""
+    marks = []
+    for on_col, off_col in config.METADATA_MARK_COLUMNS:
+        on, off = row.get(on_col, "").strip(), row.get(off_col, "").strip()
+        if not on and not off:
+            continue
+        if not on or not off or float(off) <= float(on):
+            raise ValueError(f"{path.name}, {row[config.METADATA_FILENAME_COLUMN]}: "
+                             f"{on_col}/{off_col} must be two times with onset < offset")
+        marks.append((float(on), float(off)))
+    return marks
 
 
 def load_recordings(path: Path = config.AUDIO_METADATA) -> list[Recording]:
@@ -67,7 +96,9 @@ def load_recordings(path: Path = config.AUDIO_METADATA) -> list[Recording]:
         seen.add(stem)
         diarize = is_yes(row[config.METADATA_DIARIZE_COLUMN])
         recordings.append(Recording(stem=stem, diarize=diarize,
-                                    crowd=is_yes(row[config.METADATA_CROWD_COLUMN])))
+                                    crowd=is_yes(row[config.METADATA_CROWD_COLUMN]),
+                                    speaker=speaker_name(stem),
+                                    marks=read_marks(row, path)))
     print(f"[meta] {len(recordings)} recordings in {path.name} "
           f"({sum(r.diarize for r in recordings)} to diarize, "
           f"{sum(r.crowd for r in recordings)} with crowd features)")
