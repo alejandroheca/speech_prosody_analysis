@@ -183,10 +183,6 @@ GTCRN ([Rong et al.](https://github.com/Xiaobin-Rong/gtcrn); ONNX export from
 [openSMILE](https://github.com/audeering/opensmile-python), and
 [librosa](https://librosa.org).
 
-## License
-
-TODO: choose a license.
-
 ## Citation
 
 Hermida Carrillo, A. C., Bhattacharjee, A., & Benetos, E. (2026). To the sound of
