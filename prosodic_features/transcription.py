@@ -1,6 +1,7 @@
 """Step 02: speech chunks (Silero VAD) and their words (WhisperX)."""
 from __future__ import annotations
 
+import bisect
 import difflib
 import re
 from pathlib import Path
@@ -15,8 +16,9 @@ def detect_speech_chunks(audio_path: Path, vad_model):
     """Speech chunks of a recording with Silero VAD (settings in config.py).
 
     Returns (audio, chunks): audio is the 16 kHz signal Silero read (a
-    torch tensor) and chunks is [{"start", "end"}, ...] in seconds (Silero
-    rounds them to 0.1 s), cut to the first TRANSCRIBE_MAX_SECONDS if set.
+    torch tensor) and chunks is [{"start", "end"}, ...] in seconds, exact to
+    the sample (Silero's return_seconds would round them to 0.1 s), cut to
+    the first TRANSCRIBE_MAX_SECONDS if set.
     Chunks separated by less than SILERO_MERGE_GAP_S (often touching, gap
     0) are joined into one."""
     from silero_vad import get_speech_timestamps, read_audio
@@ -27,8 +29,10 @@ def detect_speech_chunks(audio_path: Path, vad_model):
         threshold=config.SILERO_THRESHOLD,
         min_speech_duration_ms=config.SILERO_MIN_SPEECH_MS,
         min_silence_duration_ms=config.SILERO_MIN_SILENCE_MS,
-        return_seconds=True,
+        speech_pad_ms=config.SILERO_SPEECH_PAD_MS,
     )
+    chunks = [{"start": c["start"] / config.SILERO_SR, "end": c["end"] / config.SILERO_SR}
+              for c in chunks]          # samples -> seconds
     total = sum(float(c["end"]) - float(c["start"]) for c in chunks)
     n_detected = len(chunks)
     chunks = merge_close_chunks(chunks, config.SILERO_MERGE_GAP_S)
@@ -55,23 +59,55 @@ def merge_close_chunks(chunks: list[dict], max_gap: float) -> list[dict]:
     return merged
 
 
-def transcribe_chunk(chunk: np.ndarray, chunk_start: float,
-                     whisper_model, align_model, align_meta) -> list[dict]:
-    """Transcribe ONE speech chunk on its own with WhisperX and align its
-    words. Chunks are never concatenated, so a chunk's words and timestamps
-    never depend on its neighbours.
+def join_chunks(audio: np.ndarray, chunks: list[dict], gap_s: float,
+                sr: int) -> tuple[np.ndarray, list[float]]:
+    """The audio of the chunks, in order, with gap_s seconds of silence
+    between consecutive chunks. Returns (joined, piece_starts):
+    piece_starts[i] is where chunk i begins in the joined audio (s)."""
+    gap = np.zeros(int(round(gap_s * sr)), dtype=np.float32)
+    pieces, piece_starts, pos = [], [], 0
+    for i, c in enumerate(chunks):
+        piece = np.asarray(audio[int(c["start"] * sr):int(c["end"] * sr)], dtype=np.float32)
+        piece_starts.append(pos / sr)
+        pieces.append(piece)
+        pos += len(piece)
+        if i < len(chunks) - 1:
+            pieces.append(gap)
+            pos += len(gap)
+    return (np.concatenate(pieces) if pieces else np.zeros(0, np.float32)), piece_starts
 
-    Returns the chunk's WhisperX segments, timestamps shifted by
-    chunk_start onto the recording's timeline:
-    [{start, end, text, words: [{start, end, word}, ...]}, ...]"""
+
+def to_original_time(t: float, chunks: list[dict], piece_starts: list[float]) -> float:
+    """A time of the joined audio on the recording's timeline: it keeps the
+    offset of the chunk it falls in. A time inside an inserted silence keeps
+    the offset of the chunk before it (it lands at the start of that
+    chunk's following gap)."""
+    i = max(bisect.bisect_right(piece_starts, t + 1e-9) - 1, 0)
+    return round(chunks[i]["start"] + (t - piece_starts[i]), 4)
+
+
+def transcribe_joined(audio: np.ndarray, chunks: list[dict], whisper_model,
+                      align_model, align_meta) -> list[dict]:
+    """Transcribe the speech chunks with WhisperX in one pass, as one audio:
+    the chunks joined with CHUNK_JOIN_GAP_S of silence between them, so
+    WhisperX finds the sentences itself (a sentence can span chunks) and
+    never hears the long pauses and crowd noise between chunks. Words are
+    aligned on the joined audio and their times put back on the
+    recording's timeline (to_original_time); nothing else is changed.
+
+    Returns [{start, end, text, words: [{start, end, word}, ...]}, ...]."""
     import whisperx
 
-    result = whisper_model.transcribe(chunk, language=config.WHISPER_LANGUAGE)
+    joined, piece_starts = join_chunks(audio, chunks, config.CHUNK_JOIN_GAP_S, config.SILERO_SR)
+    print(f"         {len(chunks)} chunks joined with {config.CHUNK_JOIN_GAP_S}s of silence: "
+          f"{len(joined) / config.SILERO_SR:.1f}s of audio")
+    result = whisper_model.transcribe(joined, language=config.WHISPER_LANGUAGE)
     if not result.get("segments"):
         return []
     aligned = whisperx.align(result["segments"], align_model, align_meta,
-                             chunk, config.WHISPER_DEVICE,
+                             joined, config.WHISPER_DEVICE,
                              return_char_alignments=False)
+    orig = lambda t: to_original_time(t, chunks, piece_starts)
     out = []
     for seg in aligned.get("segments", []):
         seg_start = safe_float(seg.get("start"))
@@ -85,13 +121,9 @@ def transcribe_chunk(chunk: np.ndarray, chunk_start: float,
             txt = (w.get("word") or "").strip()
             if ws is None or we is None or not txt:
                 continue
-            words.append({"start": round(ws + chunk_start, 4),
-                          "end": round(we + chunk_start, 4),
-                          "word": txt})
-        out.append({"start": round(seg_start + chunk_start, 4),
-                    "end": round(seg_end + chunk_start, 4),
-                    "text": (seg.get("text") or "").strip(),
-                    "words": words})
+            words.append({"start": orig(ws), "end": orig(we), "word": txt})
+        out.append({"start": orig(seg_start), "end": orig(seg_end),
+                    "text": (seg.get("text") or "").strip(), "words": words})
     return out
 
 
@@ -102,40 +134,144 @@ def _normalize_words(text: str) -> list[str]:
     return [w.lower() for w in _WORD_RE.findall(text or "")]
 
 
-def handle_edge_words(segment_text: str, words: list[dict], chunk_start: float,
-                      chunk_end: float, slack: int = config.TRIM_WORDS_SLACK) -> list[dict]:
-    """The edge words of a WhisperX segment, checked against its own text
-    and its Silero chunk [chunk_start, chunk_end]:
-
-    1. Stray words at the edges that are not part of the segment's text are
-       dropped. Whisper sometimes hallucinates a few words on the crowd
-       noise or silence at a segment's edge; they get timestamps inside the
-       segment but do not appear in its text. Windows of the segment's own
-       word count (+/- slack, to absorb tokenization differences such as
-       "self-evident" being one word but two text tokens) slide over the
-       words, and the contiguous span whose wording best matches
-       segment_text is kept.
-    2. The first word, if it starts before the chunk, starts at the chunk's
-       start; the last word, if it ends after the chunk, ends at the chunk's
-       end (the alignment can overshoot the audio it was given by a few
-       tens of ms). Corrected words are copies, so the input words keep
-       their original times."""
+def _trim_stray_words(segment_text: str, words: list[dict], slack: int) -> list[dict]:
+    """Drop stray words at the edges of a sentence that are not part of its
+    text. Whisper sometimes hallucinates a few words on crowd noise or
+    silence at a sentence's edge; they get timestamps but do not appear in
+    its text. Windows of the sentence's own word count (+/- slack, to
+    absorb tokenization differences such as "self-evident" being one word
+    but two text tokens) slide over the words, and the contiguous span
+    whose wording best matches segment_text is kept."""
     expected = _normalize_words(segment_text)
-    if expected and len(words) > len(expected):
-        n = len(expected)
-        best_span, best_score = (0, len(words)), -1.0
-        for length in range(max(1, n - slack), min(len(words), n + slack) + 1):
-            for i in range(len(words) - length + 1):
-                window_text = " ".join(w["word"] for w in words[i:i + length])
-                score = difflib.SequenceMatcher(None, _normalize_words(window_text),
-                                                expected).ratio()
-                if score > best_score:
-                    best_score, best_span = score, (i, i + length)
-        words = words[best_span[0]:best_span[1]]
+    if not expected or len(words) <= len(expected):
+        return words
+    n = len(expected)
+    best_span, best_score = (0, len(words)), -1.0
+    for length in range(max(1, n - slack), min(len(words), n + slack) + 1):
+        for i in range(len(words) - length + 1):
+            window_text = " ".join(w["word"] for w in words[i:i + length])
+            score = difflib.SequenceMatcher(None, _normalize_words(window_text),
+                                            expected).ratio()
+            if score > best_score:
+                best_score, best_span = score, (i, i + length)
+    return words[best_span[0]:best_span[1]]
 
-    words = list(words)
-    if words and words[0]["start"] < chunk_start:
-        words[0] = {**words[0], "start": chunk_start}
-    if words and words[-1]["end"] > chunk_end:
-        words[-1] = {**words[-1], "end": chunk_end}
-    return words
+
+def handle_edge_words(sentences: list[dict], chunks: list[dict],
+                      slack: int = config.TRIM_WORDS_SLACK) -> dict[str, int]:
+    """Fit the sentences' words to the Silero chunks, IN PLACE:
+
+    1. Stray words at each sentence's edges that are not in its text are
+       dropped (_trim_stray_words).
+    2. Each word belongs to the chunk it overlaps the most (word["chunk"],
+       None if it lies in a gap). The first word of each chunk, if it starts
+       before the chunk, starts at the chunk's start; the last word of each
+       chunk, if it ends after the chunk, ends at the chunk's end. Other
+       words are not changed. Words are copies, so the input word objects
+       keep their original times.
+
+    Sentence times are set afterwards by fit_sentences_to_chunks.
+    Returns counts: {"dropped", "moved", "in_gap"}."""
+    counts = {"dropped": 0, "moved": 0, "in_gap": 0}
+
+    def overlap(w, c):
+        return min(w["end"], c["end"]) - max(w["start"], c["start"])
+
+    members: dict[int, list[tuple[dict, int]]] = {}   # chunk -> [(sentence, word index)]
+    for s in sentences:
+        kept = _trim_stray_words(s["text"], s["words"], slack)
+        counts["dropped"] += len(s["words"]) - len(kept)
+        s["words"] = [dict(w) for w in kept]
+        for wi, w in enumerate(s["words"]):
+            k = max(range(len(chunks)), key=lambda i: overlap(w, chunks[i]))
+            w["chunk"] = k if overlap(w, chunks[k]) > 0 else None
+            if w["chunk"] is None:
+                counts["in_gap"] += 1
+            else:
+                members.setdefault(k, []).append((s, wi))
+
+    for k, ws in members.items():
+        c = chunks[k]
+        (s0, i0), (s1, i1) = ws[0], ws[-1]
+        if s0["words"][i0]["start"] < c["start"]:
+            s0["words"][i0]["start"] = c["start"]
+            counts["moved"] += 1
+        if s1["words"][i1]["end"] > c["end"]:
+            s1["words"][i1]["end"] = c["end"]
+            counts["moved"] += 1
+    return counts
+
+
+def trim_chunk_ends(chunks: list[dict], sentences: list[dict],
+                    pad: float = config.CHUNK_END_PAD_S) -> list[dict]:
+    """The chunks with each end moved back to the end of the chunk's last
+    word plus pad seconds (after handle_edge_words, which sets
+    word["chunk"]). Ends are only ever moved back, never forward; chunks
+    without words keep their end. Returns new chunk dicts."""
+    last_end: dict[int, float] = {}
+    for s in sentences:
+        for w in s["words"]:
+            k = w.get("chunk")
+            if k is not None:
+                last_end[k] = max(last_end.get(k, w["end"]), w["end"])
+    return [{"start": c["start"],
+             "end": min(c["end"], round(last_end[k] + pad, 4)) if k in last_end else c["end"]}
+            for k, c in enumerate(chunks)]
+
+
+def fit_sentences_to_chunks(sentences: list[dict], chunks: list[dict],
+                            max_fragment: float = config.SENTENCE_FRAGMENT_MAX_S) -> int:
+    """Set each sentence's chunks and start / end, IN PLACE (after
+    handle_edge_words, which sets word["chunk"]).
+
+    A sentence can span several chunks. But where it shares its first (or
+    last) chunk with the previous (or next) sentence and its own piece of
+    that chunk is shorter than max_fragment seconds, the piece is an
+    alignment fragment (e.g. the "100" of "100 years later." placed at the
+    end of the chunk before): the sentence does not take that chunk, so the
+    gap between the chunks stays the boundary between the two sentences.
+    Word times are not changed.
+
+    Then, per chunk, the first sentence that takes it starts at the chunk's
+    start and the last one ends at the chunk's end; the other sentence
+    boundaries inside a chunk follow their words. s["chunks"] lists the
+    chunks each sentence takes. Returns how many fragments were found."""
+    sents = [s for s in sentences if s["words"]]
+
+    def piece(s, k):
+        ws = [w for w in s["words"] if w.get("chunk") == k]
+        return ws[-1]["end"] - ws[0]["start"] if ws else 0.0
+
+    own = []
+    for s in sents:
+        ks = [w["chunk"] for w in s["words"] if w.get("chunk") is not None]
+        own.append(sorted(set(ks)))
+    n_fragments = 0
+    for i, s in enumerate(sents):
+        ks = own[i]
+        if len(ks) < 2:
+            continue
+        first, last = ks[0], ks[-1]
+        if i > 0 and first in own[i - 1] and piece(s, first) < max_fragment:
+            ks = ks[1:]
+            n_fragments += 1
+        if i + 1 < len(sents) and last in own[i + 1] and len(ks) > 1 and piece(s, last) < max_fragment:
+            ks = ks[:-1]
+            n_fragments += 1
+        own[i] = ks
+
+    takers: dict[int, list[int]] = {}
+    for i, ks in enumerate(own):
+        for k in ks:
+            takers.setdefault(k, []).append(i)
+    for i, s in enumerate(sents):
+        ks = own[i]
+        s["chunks"] = ks
+        in_own = [w for w in s["words"] if w.get("chunk") in ks] or s["words"]
+        s["start"], s["end"] = in_own[0]["start"], in_own[-1]["end"]
+        if ks:
+            if takers[ks[0]][0] == i:
+                s["start"] = chunks[ks[0]]["start"]
+            if takers[ks[-1]][-1] == i:
+                s["end"] = chunks[ks[-1]]["end"]
+    return n_fragments

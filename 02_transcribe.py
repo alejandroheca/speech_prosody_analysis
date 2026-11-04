@@ -7,7 +7,12 @@ Step 02: speech chunks, words and speakers of every recording.
 
 For each recording in config.AUDIO_METADATA (its speech file from step 01):
   1. Silero VAD finds the speech chunks.
-  2. WhisperX transcribes and word-aligns each chunk on its own.
+  2. The chunks are joined into one audio with CHUNK_JOIN_GAP_S (0.1 s) of
+     silence between them, and WhisperX transcribes and word-aligns it in
+     one pass: it finds the sentences itself (a sentence can span chunks)
+     and never hears the pauses and crowd noise between chunks. WhisperX
+     cuts it into its decoding windows with its own VAD (WHISPER_VAD_METHOD,
+     Silero). Times are put back on the recording's timeline.
   3. Speakers. The target speaker's name is the file name's prefix (up to
      the first underscore, e.g. "shelton"). Single-speaker recordings get
      it for every word. Recordings with DIARIZATION_NEEDED = 1 in the
@@ -17,16 +22,24 @@ For each recording in config.AUDIO_METADATA (its speech file from step 01):
      talks (ONSET_S1/OFFSET_S1, ONSET_S2/OFFSET_S2), the diarization
      speaker that talks most within them gets the target's name, and the
      others keep their SPEAKER_xx labels.
-  4. Edge words of each WhisperX sentence (handle_edge_words): stray words
-     that are not in its text are dropped, and a first / last word that
-     crosses its Silero chunk is moved inside it. Sentence times follow
-     their words, except that the first sentence of each chunk starts at
-     the chunk's start and the last one ends at the chunk's end.
+  4. Edge words (handle_edge_words): stray words at a sentence's edges
+     that are not in its text are dropped; each word belongs to the chunk
+     it overlaps most, and the first / last word of each chunk is moved
+     inside the chunk if it crosses it. Each chunk's end is then moved
+     back to its last word's end + CHUNK_END_PAD_S (trim_chunk_ends); these
+     trimmed chunks are the ones saved and used from here on (step 03
+     too). Sentences (fit_sentences_to_chunks):
+     a sentence can span chunks, but a piece shorter than
+     SENTENCE_FRAGMENT_MAX_S in a chunk shared with the neighbouring
+     sentence is an alignment fragment and the sentence leaves that chunk
+     to its neighbour. The first sentence of each chunk starts at the
+     chunk's start, the last one ends at the chunk's end.
 
 Outputs, per recording (config.TRANSCRIPT_DIR; recordings with a JSON are
 skipped):
   <name>.json                 sentences with their words and speakers
-  <name>_silero_chunks.txt    Audacity labels: VAD chunks
+  <name>_silero_chunks.txt    Audacity labels: VAD chunks, ends trimmed (step 4)
+  <name>_silero_chunks_original.txt  Audacity labels: VAD chunks as Silero found them
   <name>_words.txt            Audacity labels: words (after step 4)
   <name>_words_original.txt   Audacity labels: words (before step 4)
   <name>_sentences.txt        Audacity labels: sentences
@@ -49,8 +62,9 @@ from prosodic_features.audio import find_audio_file
 from prosodic_features.metadata import Recording, clean_stem, load_recordings
 from prosodic_features.speakers import (assign_word_speakers, identify_target_speaker,
                                  load_speaker_turns, rename_speaker, set_segment_speaker)
-from prosodic_features.transcription import (detect_speech_chunks, handle_edge_words,
-                                      transcribe_chunk)
+from prosodic_features.transcription import (detect_speech_chunks, fit_sentences_to_chunks,
+                                      handle_edge_words, transcribe_joined,
+                                      trim_chunk_ends)
 from prosodic_features.utils import format_hms
 
 
@@ -82,6 +96,7 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     stem = clean_stem(audio_path.stem)
     out = {name: config.TRANSCRIPT_DIR / f"{stem}{suffix}" for name, suffix in (
         ("json", ".json"), ("chunks", "_silero_chunks.txt"), ("words", "_words.txt"),
+        ("chunks_original", "_silero_chunks_original.txt"),
         ("words_original", "_words_original.txt"), ("sentences", "_sentences.txt"))}
     print(f"\n{'=' * 60}\n[File] {audio_path.name}  (diarize={is_diarized})")
     if out["json"].exists():
@@ -92,23 +107,16 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     # 1. speech chunks (saved right away, in case a later step fails)
     print("  [1/3] Running Silero VAD...")
     audio, chunks = detect_speech_chunks(audio_path, models["vad"])
-    write_audacity_labels(out["chunks"], [
+    write_audacity_labels(out["chunks_original"], [
         (c["start"], c["end"], f"chunk_{i:04d} ({c['end'] - c['start']:.2f}s)")
         for i, c in enumerate(chunks)])
-    print(f"         [saved] {out['chunks'].name}")
+    print(f"         [saved] {out['chunks_original'].name}")
 
-    # 2. transcribe each chunk on its own
-    print(f"  [2/3] Transcribing {len(chunks)} chunks independently...")
-    sentences: list[dict] = []
-    for i, c in enumerate(chunks):
-        piece = audio[int(c["start"] * config.SILERO_SR):int(c["end"] * config.SILERO_SR)]
-        piece = piece.numpy() if isinstance(piece, torch.Tensor) else np.array(piece)
-        for s in transcribe_chunk(piece, c["start"], models["whisper"],
-                                  models["align"], models["align_meta"]):
-            s["chunk"] = i      # index of the sentence's Silero chunk
-            sentences.append(s)
-        if (i + 1) % 20 == 0 or i + 1 == len(chunks):
-            print(f"         {i + 1}/{len(chunks)} chunks transcribed", flush=True)
+    # 2. transcribe the chunks joined with short silences, in one pass
+    print(f"  [2/3] Transcribing {len(chunks)} chunks joined into one audio...")
+    audio = audio.numpy() if isinstance(audio, torch.Tensor) else np.asarray(audio)
+    sentences = transcribe_joined(audio, chunks, models["whisper"],
+                                  models["align"], models["align_meta"])
     words_original = [w for s in sentences for w in s["words"]]
 
     # 3. speakers, on all words (step 4 keeps these word objects, or copies them)
@@ -136,22 +144,21 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
         diarized = True
     print(f"  [speaker] {speaker_source}")
 
-    # 4. edge words: drop stray ones, move chunk-crossing ones inside the chunk;
-    #    sentence times follow the words that remain
-    words: list[dict] = []
+    # 4. edge words: drop stray ones, keep each chunk's first / last word
+    #    inside the chunk; sentence times follow
+    counts = handle_edge_words(sentences, chunks)
+    sentences = [s for s in sentences if s["words"]]
+    chunks = trim_chunk_ends(chunks, sentences)
+    write_audacity_labels(out["chunks"], [
+        (c["start"], c["end"], f"chunk_{i:04d} ({c['end'] - c['start']:.2f}s)")
+        for i, c in enumerate(chunks)])
+    n_fragments = fit_sentences_to_chunks(sentences, chunks)
     for s in sentences:
-        c = chunks[s["chunk"]]
-        s["words"] = handle_edge_words(s["text"], s["words"], c["start"], c["end"])
-        if s["words"]:
-            s["start"], s["end"] = s["words"][0]["start"], s["words"][-1]["end"]
         set_segment_speaker(s)
-        words += s["words"]
-    # the first sentence of each chunk starts at the chunk's start, the last
-    # one ends at the chunk's end (word times are not changed)
-    for i, c in enumerate(chunks):
-        in_chunk = [s for s in sentences if s["chunk"] == i and s["words"]]
-        if in_chunk:
-            in_chunk[0]["start"], in_chunk[-1]["end"] = c["start"], c["end"]
+    words = [w for s in sentences for w in s["words"]]
+    print(f"  [edges] {counts['moved']} word boundaries moved inside their chunk, "
+          f"{counts['dropped']} stray words dropped, {counts['in_gap']} words in a gap; "
+          f"{n_fragments} sentence fragments left to the neighbouring sentence's chunk")
 
     out["json"].write_text(json.dumps({
         "audio_path": str(audio_path),
@@ -160,11 +167,13 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
         "device": config.WHISPER_DEVICE,
         "compute_type": config.WHISPER_COMPUTE_TYPE,
         "silero_threshold": config.SILERO_THRESHOLD,
+        "chunk_join_gap_s": config.CHUNK_JOIN_GAP_S,
+        "whisper_vad_method": config.WHISPER_VAD_METHOD,
         "n_silero_chunks": len(chunks),
         "needs_diarization": is_diarized,
         "diarized": diarized,
         "target_speaker": target,
-        "segments": sentences,   # [{start, end, text, words: [{start, end, word, speaker}], chunk, speaker, speaker_pure}]
+        "segments": sentences,   # [{start, end, text, words: [{start, end, word, chunk, speaker}], chunks, speaker, speaker_pure}]
     }, indent=2), encoding="utf-8")
     write_audacity_labels(out["words"], [
         (w["start"], w["end"], w["word"] + _speaker_label(w)) for w in words])
@@ -173,7 +182,7 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     write_audacity_labels(out["sentences"], [
         (s["start"], s["end"], s["text"].replace("\t", " ").replace("\n", " ") + _speaker_label(s))
         for s in sentences])
-    print(f"  [Saved] {out['json'].name}  (+ silero_chunks.txt, words.txt, "
+    print(f"  [Saved] {out['json'].name}  (+ silero_chunks.txt, silero_chunks_original.txt, words.txt, "
           "words_original.txt, sentences.txt)")
     print(f"  [Done]  Elapsed: {format_hms(time.time() - t_start)}")
 
@@ -199,7 +208,8 @@ def main() -> None:
     models = {"vad": load_silero_vad(),
               "whisper": whisperx.load_model(config.WHISPER_MODEL, config.WHISPER_DEVICE,
                                              compute_type=config.WHISPER_COMPUTE_TYPE,
-                                             language=config.WHISPER_LANGUAGE),
+                                             language=config.WHISPER_LANGUAGE,
+                                             vad_method=config.WHISPER_VAD_METHOD),
               "diarizer": {}}
     models["align"], models["align_meta"] = whisperx.load_align_model(
         language_code=config.WHISPER_LANGUAGE, device=config.WHISPER_DEVICE)

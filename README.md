@@ -106,7 +106,7 @@ python 03_features.py
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
-| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns each chunk (WhisperX), and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
+| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), joins them into one audio with 0.1 s of silence between them, transcribes and word-aligns it in one pass (WhisperX), keeps each chunk's first and last word inside the chunk, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
 | 3 | `03_features.py` | Builds single-speaker segments and computes, per segment, eGeMAPS (openSMILE), speech rate, and the duration and crowd loudness of the following gap. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
@@ -135,11 +135,14 @@ data/
 
 Diarization files exist only for diarized recordings. The label tracks are
 `_silero_chunks.txt` (speech chunks; chunks less than `SILERO_MERGE_GAP_S` =
-0.05 s apart are joined), `_words.txt` and `_words_original.txt`
-(words after and before the edge-word check: stray hallucinated edge words
-removed, and a sentence's first and last word kept inside its Silero chunk), and
-`_sentences.txt` (the first sentence of each chunk starts at the chunk's start,
-the last one ends at the chunk's end). Load the separated audio in Audacity, then import a label
+0.05 s apart are joined, and each chunk ends `CHUNK_END_PAD_S` = 0.03 s after
+its last word; `_silero_chunks_original.txt` has the chunks as Silero found them), `_words.txt` and `_words_original.txt`
+(words after and before the edge-word check: stray hallucinated words at a
+sentence's edges removed, and each chunk's first and last word kept inside the
+chunk), and `_sentences.txt` (a sentence can span several chunks, but not by a
+fragment shorter than `SENTENCE_FRAGMENT_MAX_S` = 0.5 s into a chunk it shares
+with the neighbouring sentence; the first sentence of each chunk starts at the
+chunk's start and the last one ends at the chunk's end). Load the separated audio in Audacity, then import a label
 track to check it by listening.
 
 `<name>_utterance_features.csv` contains:
