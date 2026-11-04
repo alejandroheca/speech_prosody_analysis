@@ -9,27 +9,48 @@ The pipeline takes a recording (`.flac` recommended; `.wav` also accepted) and:
 
 1. denoises the speech, separating the speaker's voice from the crowd and
    background;
-2. transcribes the speech word by word and splits it into utterances, labelling
+2. transcribes the speech word by word and splits it into sentences, labelling
    who speaks when in multi-speaker recordings;
-3. computes prosodic features for every utterance: the eGeMAPS set, plus
+3. estimates the recording's speech quality (PESQ, by TorchAudio-Squim, on its
+   speech only);
+4. in recordings with an active crowd (`ACTIVE_CROWD = 1`), detects crowd
+   reactions with the CNN of
+   [crowd_reaction_analysis](https://github.com/chymaera96/crowd_reaction_analysis);
+5. computes prosodic features for every speech chunk or every sentence (your
+   choice, `FEATURES_UNIT`), on its voiced parts only: the eGeMAPS set, plus
    rhythm measures not in eGeMAPS (number of words, speech rate, and the
-   duration of the gap after the utterance).
+   duration of the gap after it).
 
-For recordings with an active crowd (`ACTIVE_CROWD = 1`), it also computes a
-simple crowd energy measure in each gap between utterances: the loudness of
-the separated crowd track in the gap, relative to the whole crowd track.
+For recordings with an active crowd, it also measures the crowd's loudness in
+the gaps where the CNN detects a reaction: the loudness of the separated crowd
+track in the gap after each chunk or sentence and, for sentences, summed over
+the sentence's inner pauses and its end.
 
-The output is one table per recording, with one row per utterance.
+Before any feature is computed, the speech and crowd tracks are divided by the
+99th percentile of the absolute amplitude of the original recording (one value
+per recording, since both come from the same microphone), so features are
+comparable across recordings with different gain.
+
+The output is one table per recording, with one row per chunk or sentence,
+and a summary table with one row per processed recording.
 
 ## Installation
 
 Run commands from the repository root. The pipeline uses two Conda
-environments: `crowd_audio` for steps 1 and 3, and `crowd_transcribe` for
-step 2.
+environments: `crowd_audio` for steps 1 and 5, and `crowd_transcribe` for
+steps 2 to 4.
 
 ```
 conda env create -f envs/crowd_audio.yml
 conda env create -f envs/crowd_transcribe.yml
+```
+
+Step 4 uses the crowd-reaction CNN from the parallel repository. Clone it next
+to this one (or set `CROWD_CNN_REPO` to its path) and download its weights:
+
+```
+git clone https://github.com/chymaera96/crowd_reaction_analysis ../crowd_reaction_analysis
+cd ../crowd_reaction_analysis && python scripts/download_weights.py --model cnn_tcn
 ```
 
 ## Models
@@ -75,7 +96,7 @@ reads this file. It uses these columns:
 |---|---|---|---|
 | `FILENAME` | e.g. `mlk_1963_dream.wav` | all | Audio file name in `data/audio/raw/`. The name without extension names every output; its prefix up to the first `_` is the speaker's name. |
 | `DIARIZATION_NEEDED` | 1 / 0 | 2 | 1: several people speak (interview, debate, Q&A). The recording is diarized, and each word gets the speaker whose turn overlaps it most (`SPEAKER_00`, `SPEAKER_01`, ...). 0: every word gets the speaker's name from the file name. |
-| `ACTIVE_CROWD` | 1 / 0 | 3 | 1: an audience reacts to the speaker, so crowd loudness is measured in the gaps between segments. 0: the gaps contain other speakers or silence, and the crowd columns stay empty. |
+| `ACTIVE_CROWD` | 1 / 0 | 4, 5 | 1: an audience reacts to the speaker, so the crowd is detected (step 4) and its loudness is measured in the gaps between chunks or sentences (step 5). 0: the gaps contain other speakers or silence, and the crowd columns stay empty. |
 | `ONSET_S1`, `OFFSET_S1`, `ONSET_S2`, `OFFSET_S2` | seconds | 2 | Optional, for diarized recordings. One or two stretches where only the target speaker talks. The diarization speaker that talks most within them gets the speaker's name from the file name; the other voices keep their `SPEAKER_xx` labels. Leave both cells of a pair empty if unused. |
 
 `1`, `yes`, `y`, and `true` count as 1; any other value, including an empty
@@ -86,7 +107,7 @@ parameters are in `prosodic_features/config.py`.
 
 ## Running the pipeline
 
-Run the three steps in order:
+Run the five steps in order:
 
 ```
 ./run_all.sh
@@ -99,19 +120,23 @@ conda activate crowd_audio
 python 01_separate.py
 conda activate crowd_transcribe
 python 02_transcribe.py
+python 03_quality.py
+python 04_crowd_detection.py
 conda activate crowd_audio
-python 03_features.py
+python 05_features.py
 ```
 
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
-| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), joins them into one audio with 0.1 s of silence between them, transcribes and word-aligns it in one pass (WhisperX), keeps each chunk's first and last word inside the chunk, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
-| 3 | `03_features.py` | Builds single-speaker segments and computes, per segment, eGeMAPS (openSMILE), speech rate, and the duration and crowd loudness of the following gap. |
+| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), joins them into one audio with 0.1 s of silence between them, transcribes and word-aligns it in one pass (WhisperX), keeps each chunk's first and last word inside the chunk, joins sentences WhisperX cut at a pause, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
+| 3 | `03_quality.py` | Estimates the speech quality of the original recording, without a reference, on its speech chunks: PESQ from 1 (bad) to 4.5 (excellent), by TorchAudio-Squim, written to `recordings_done.csv`. |
+| 4 | `04_crowd_detection.py` | In recordings with `ACTIVE_CROWD = 1`, runs the crowd-reaction CNN (CNN-TCN, crowd-event head) on the original recording and keeps the crowd regions with a mean probability above `CNN_MIN_MEAN_SCORE` (0.8). |
+| 5 | `05_features.py` | Normalizes the gain of the speech and crowd tracks, then computes, per chunk or sentence (`FEATURES_UNIT`), eGeMAPS (openSMILE) and speech rate on its voiced parts, and the duration and crowd loudness of its gaps. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
 can be restarted. `SEPARATE_N_WORKERS` and `FEATURES_N_WORKERS` in `config.py`
-set how many recordings (step 1) and segments (step 3) are processed at once;
+set how many recordings (step 1) and rows (step 5) are processed at once;
 adapt them to your machine. To test on the start of each recording, set
 `SEPARATE_MAX_SECONDS` and `TRANSCRIBE_MAX_SECONDS`.
 
@@ -130,46 +155,88 @@ data/
   derived/diarization/denoised_<name>_diarization.json, .rttm speaker turns (step 2)
   derived/transcripts/<name>.json                            sentences, words, times, speakers (step 2)
   derived/transcripts/<name>_*.txt                           label tracks (step 2)
-  derived/features/<name>_utterance_features.csv             one row per segment (step 3)
+  derived/crowd_cnn/<name>_crowd_cnn.txt                     crowd regions, label track (step 4)
+  derived/features/<name>_<unit>_features.csv                one row per chunk or sentence (step 5)
+  recordings_done.csv                                        one row per processed recording (steps 3, 5)
 ```
 
 Diarization files exist only for diarized recordings. The label tracks are
 `_silero_chunks.txt` (speech chunks; chunks less than `SILERO_MERGE_GAP_S` =
 0.05 s apart are joined, and each chunk ends `CHUNK_END_PAD_S` = 0.03 s after
-its last word; `_silero_chunks_original.txt` has the chunks as Silero found them), `_words.txt` and `_words_original.txt`
-(words after and before the edge-word check: stray hallucinated words at a
-sentence's edges removed, and each chunk's first and last word kept inside the
-chunk), and `_sentences.txt` (a sentence can span several chunks, but not by a
+its last word), `_words.txt` (words after the edge-word check: stray
+hallucinated words at a sentence's edges removed, and each chunk's first and
+last word kept inside the chunk), and `_sentences.txt` (a sentence not ending in `.`, `?` or `!`, or
+ending in `...` before a sentence starting in lowercase, is joined with the next one if the same speaker goes on within
+`SENTENCE_JOIN_MAX_GAP_S` = 3 s; a sentence can span several chunks, but not by a
 fragment shorter than `SENTENCE_FRAGMENT_MAX_S` = 0.5 s into a chunk it shares
 with the neighbouring sentence; the first sentence of each chunk starts at the
 chunk's start and the last one ends at the chunk's end). Load the separated audio in Audacity, then import a label
 track to check it by listening.
 
-`<name>_utterance_features.csv` contains:
+`<name>_<unit>_features.csv` has one row per chunk or sentence, set by
+`FEATURES_UNIT` in `config.py` (or the environment variable
+`CROWD_FEATURES_UNIT`):
 
-- `start`, `end`, `duration`, `speaker`, `multi_speaker`, `text`, `n_words`,
-  `word_rate`, `sentence_end`: the segment. `multi_speaker` marks segments cut
-  from a Silero chunk that contained a speaker change.
-- `gap_duration`, `gap_duration_rob`, `reaction_end`: the gap until the next
-  segment. The `_rob` versions leave out 50 ms at each end of the gap.
-- `crowd_energy`, `crowd_energy_rob`: crowd loudness in the gap, relative to the
-  loudness of the whole crowd track (eGeMAPS `loudness_sma3_amean`). These are
-  computed only when `ACTIVE_CROWD = 1`, and never after a `multi_speaker`
-  segment.
-- `crowd_energy_rob_lag`: `crowd_energy_rob` of the previous gap. For the first
-  segment, it is the crowd before the speech starts.
-- `sp_<eGeMAPS feature>`: the 88 eGeMAPS v02 functionals. They are not
-  normalized, so loudness and energy features depend on each recording's gain.
-- `rec_loudness_p99`: the recording's loudness reference, the 99th percentile
-  of the frame-level eGeMAPS loudness of the whole original recording, before
-  separation (the same value on every row).
-- `sp_loudness_sma3_amean_rel`: `sp_loudness_sma3_amean` divided by
-  `rec_loudness_p99`, comparable across recordings with different gain.
+- `chunk` (default): one row per Silero chunk; a chunk where the speaker
+  changes is split into one row per speaker. The row is its own voiced part.
+- `sentence`: one row per sentence. A sentence's voiced parts are the Silero
+  chunks it spans, cut to the sentence's own start and end (a sentence inside
+  a longer chunk keeps only its part).
+
+All speech features use only the voiced parts; the crowd features use the gaps.
+
+- `start`, `end`, `speaker`, `multi_speaker`, `text`: the row. `multi_speaker`
+  marks chunks cut where the speaker changes, or sentences with words of
+  several speakers.
+- `speech_quality`: the recording's speech quality (the same on every row),
+  see below.
+- `sentence_end` (chunks only): the chunk ends a sentence. `n_chunks`
+  (sentences only): the sentence's number of voiced parts.
+- `duration`, `n_words`, `word_rate`: total duration of the voiced parts, and
+  words per second of it.
+- `gap_duration`, `gap_duration_rob`, `reaction_end`: the end gap, from the
+  row's end to the next row's start. The `_rob` versions leave out
+  50 ms at each end of the gap.
+- `crowd_energy_end`, `crowd_energy_end_rob`: crowd loudness in the end gap
+  (eGeMAPS `loudness_sma3_amean` of the gain-normalized crowd track).
+- `crowd_energy_around`, `crowd_energy_around_rob` (sentences only): the sum
+  of the crowd loudness in the gaps between the sentence's voiced parts and in
+  its end gap.
+- In both, a gap counts only if a crowd region from step 4 overlaps it;
+  otherwise, or if it is shorter than `MIN_SEGMENT_S` (0.25 s), it counts as 0.
+  The `_rob` versions measure each gap without 50 ms at each end. They are
+  computed only when `ACTIVE_CROWD = 1`, and never for a `multi_speaker`
+  row (empty otherwise).
+- `crowd_energy_end_rob_lag`: `crowd_energy_end_rob` of the previous row.
+  For the first row, it is the crowd before the speech starts.
+- `sp_<eGeMAPS feature>`: the 88 eGeMAPS v02 functionals of the voiced parts,
+  on the gain-normalized speech track.
+
+Gain normalization: both tracks are divided by the `AMPLITUDE_REF_PERCENTILE`
+(99th) percentile of the absolute sample amplitude of the whole original
+recording, before separation. A high percentile rather than the maximum, so a
+single spike does not set the scale.
+
+Speech quality (`speech_quality`): the perceived quality of the speech, PESQ
+from 1 (bad) to 4.5 (excellent), covering noise, distortion and band-limiting.
+It is estimated in step 3 by
+[TorchAudio-Squim](https://pytorch.org/audio/stable/tutorials/squim_tutorial.html)
+(objective model) from the original recording alone, without a clean
+reference, on its voiced Silero chunks (in windows of at most 10 s, averaged
+weighted by duration).
+
+`recordings_done.csv`, next to the metadata file (`recordings.xlsx`), has one
+row per processed recording: step 3 writes its `speech_quality`, and step 5
+reads it from there and adds the rest: `file`,
+`speaker` (the file name's prefix), `duration` (seconds), `diarized` (1 / 0),
+and `speech_quality`.
 
 ## Repository structure
 
 ```
-01_separate.py, 02_transcribe.py, 03_features.py   the three steps
+01_separate.py, 02_transcribe.py,
+03_quality.py, 04_crowd_detection.py,
+05_features.py                                     the five steps
 run_all.sh                                         runs them in order
 envs/                                              Conda environments
 models/                                            GTCRN model (not included)
@@ -182,9 +249,11 @@ prosodic_features/
   transcription.py     step 2: VAD, WhisperX, edge-word check
   diarization.py       step 2: pyannote
   speakers.py          step 2: speaker of each word and sentence
-  segments.py          step 3: segments from chunks and words
-  segment_features.py  step 3: all features of one segment
-  features/            step 3: one file per feature
+  speech_quality.py    step 3: speech quality (Squim)
+  crowd_detection.py   step 4: crowd regions (CNN of crowd_reaction_analysis)
+  segments.py          step 5: chunks or sentences and their voiced parts
+  segment_features.py  step 5: all features of one chunk or sentence
+  features/            step 5: one file per feature
 ```
 
 ## Acknowledgements
@@ -194,7 +263,8 @@ GTCRN ([Rong et al.](https://github.com/Xiaobin-Rong/gtcrn); ONNX export from
 [Silero VAD](https://github.com/snakers4/silero-vad),
 [WhisperX](https://github.com/m-bain/whisperX),
 [pyannote.audio](https://github.com/pyannote/pyannote-audio),
-[openSMILE](https://github.com/audeering/opensmile-python), and
+[openSMILE](https://github.com/audeering/opensmile-python),
+TorchAudio-Squim, and
 [librosa](https://librosa.org).
 
 ## Citation

@@ -5,7 +5,8 @@ One row per recording. Columns used (names set in config.py):
   METADATA_DIARIZE_COLUMN   1 / 0: the recording has several speakers
                             (interview, debate, ...) and is diarized in step 02
   METADATA_CROWD_COLUMN     1 / 0: an audience reacts to the speaker, so the
-                            crowd's loudness in the gaps is measured in step 03
+                            crowd is detected (step 04) and its
+                            loudness in the gaps is measured (step 05)
                             (0: the gaps are other speakers or silence; the
                             crowd columns are left empty)
   METADATA_MARK_COLUMNS     optional: onset / offset pairs (seconds) of
@@ -30,7 +31,7 @@ from prosodic_features import config
 class Recording:
     stem: str          # file name without extension: the name of every output
     diarize: bool      # run the diarization pathway in step 02
-    crowd: bool        # compute crowd features in step 03
+    crowd: bool        # detect the crowd (step 04), compute crowd features (step 05)
     speaker: str       # target speaker's name: the file name's prefix
     marks: list[tuple[float, float]] = field(default_factory=list)  # target speaker's stretches (s)
 

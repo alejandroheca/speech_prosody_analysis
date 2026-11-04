@@ -1,4 +1,4 @@
-# Steps 01 (separation) and 03 (features).
+# Steps 01 (separation) and 05 (features).
 #   conda env create -f envs/crowd_audio.yml
 name: crowd_audio
 channels:

@@ -1,104 +1,102 @@
-"""Step 03: speaker-homogeneous segments from the Silero chunks and words."""
+"""Step 05: the rows of the features table (config.FEATURES_UNIT), each with
+its voiced pieces:
+  chunk     one row per Silero chunk, split where the speaker changes
+            inside it (load_chunks)
+  sentence  one row per sentence of the transcript (load_sentences)"""
 from __future__ import annotations
 
 from prosodic_features import config
 from prosodic_features.utils import safe_float
 
 
-def flatten_words(transcript: dict) -> list[dict]:
-    """All words of a step-02 transcript JSON as one time-sorted list of
-    {start, end, word, speaker, is_sentence_end}. Words without a speaker
-    get config.DEFAULT_SPEAKER. is_sentence_end marks the last word of each
-    WhisperX sentence, so the segment containing it knows it ends one."""
-    words: list[dict] = []
+def load_sentences(transcript: dict, chunks: list[tuple[float, float]]) -> list[dict]:
+    """The transcript's sentences as [{start, end, speaker, multi_speaker,
+    text, words, pieces}], by start.
+
+    pieces are the sentence's voiced parts: each Silero chunk the sentence
+    takes (sentence["chunks"], indices into chunks), cut to the sentence's
+    own start and end, so a sentence inside a longer chunk keeps only its
+    own part. A sentence without chunks gets its own span as one piece.
+    multi_speaker: the sentence's words are not all from one speaker.
+    Words without a speaker, and sentences without one, get
+    config.DEFAULT_SPEAKER. Sentences without valid words are dropped."""
+    sentences: list[dict] = []
     for seg in transcript.get("segments", []):
-        valid: list[dict] = []
+        words = []
         for w in seg.get("words", []):
             ws, we = safe_float(w.get("start")), safe_float(w.get("end"))
             txt = (w.get("word") or "").strip()
-            if ws is None or we is None or not txt:
-                continue
-            valid.append({"start": ws, "end": we, "word": txt,
-                          "speaker": w.get("speaker") or config.DEFAULT_SPEAKER})
-        for i, wd in enumerate(valid):
-            wd["is_sentence_end"] = (i == len(valid) - 1)
+            if ws is not None and we is not None and txt:
+                words.append({"start": ws, "end": we, "word": txt,
+                              "speaker": w.get("speaker") or config.DEFAULT_SPEAKER})
+        start, end = safe_float(seg.get("start")), safe_float(seg.get("end"))
+        if not words or start is None or end is None or end <= start:
+            continue
+        pieces = []
+        for k in seg.get("chunks", []):
+            if 0 <= k < len(chunks):
+                ps, pe = max(start, chunks[k][0]), min(end, chunks[k][1])
+                if pe > ps:
+                    pieces.append((ps, pe))
+        sentences.append({
+            "start": start, "end": end,
+            "speaker": seg.get("speaker") or config.DEFAULT_SPEAKER,
+            "multi_speaker": not seg.get("speaker_pure", True),
+            "text": (seg.get("text") or "").strip(),
+            "words": words,
+            "pieces": sorted(pieces) or [(start, end)],
+        })
+    sentences.sort(key=lambda s: s["start"])
+    return sentences
+
+
+def load_chunks(transcript: dict, chunks: list[tuple[float, float]]) -> list[dict]:
+    """One row per Silero chunk, as [{start, end, speaker, multi_speaker,
+    text, words, pieces, sentence_end}], by start.
+
+    Each word belongs to the chunk containing its midpoint. A chunk with one
+    speaker gives one row with the chunk's own start and end. A chunk with a
+    speaker change gives one row per run of same-speaker words, cut at the
+    runs' word edges (the outer edges stay the chunk's), all with
+    multi_speaker=True. Chunks without words are dropped. pieces is the row
+    itself; sentence_end: the row contains the last word of a sentence."""
+    words: list[dict] = []
+    for seg in transcript.get("segments", []):
+        valid = []
+        for w in seg.get("words", []):
+            ws, we = safe_float(w.get("start")), safe_float(w.get("end"))
+            txt = (w.get("word") or "").strip()
+            if ws is not None and we is not None and txt:
+                valid.append({"start": ws, "end": we, "word": txt,
+                              "speaker": w.get("speaker") or config.DEFAULT_SPEAKER,
+                              "is_sentence_end": False})
+        if valid:
+            valid[-1]["is_sentence_end"] = True
         words.extend(valid)
     words.sort(key=lambda w: w["start"])
-    return words
 
-
-def _words_in_span(words: list[dict], start: float, end: float) -> list[dict]:
-    """Words whose midpoint falls within [start, end], so each word belongs
-    to exactly one chunk."""
-    return [w for w in words if start <= 0.5 * (w["start"] + w["end"]) <= end]
-
-
-def split_chunks_by_speaker(chunks: list[tuple[float, float]],
-                            words: list[dict]) -> list[dict]:
-    """One segment per run of same-speaker words inside each Silero chunk.
-
-    A chunk with one speaker gives one segment with the chunk's own start
-    and end. A chunk spanning a speaker change gives one segment per run,
-    cut at the runs' word edges (the outer edges stay the chunk's), and all
-    of them get multi_speaker=True. Chunks without words give one segment
-    with no speaker and no words.
-
-    Returns [{start, end, speaker, multi_speaker, text, words}], by start."""
-    segments: list[dict] = []
-    for (cs, ce) in chunks:
-        cw = _words_in_span(words, cs, ce)
+    rows: list[dict] = []
+    for cs, ce in chunks:
+        cw = [w for w in words if cs <= 0.5 * (w["start"] + w["end"]) <= ce]
         if not cw:
-            segments.append({"start": cs, "end": ce, "speaker": None,
-                             "multi_speaker": False, "text": "", "words": []})
             continue
-
-        runs: list[list[dict]] = []
-        cur: list[dict] = [cw[0]]
+        runs: list[list[dict]] = [[cw[0]]]
         for w in cw[1:]:
-            if w["speaker"] == cur[-1]["speaker"]:
-                cur.append(w)
+            if w["speaker"] == runs[-1][-1]["speaker"]:
+                runs[-1].append(w)
             else:
-                runs.append(cur)
-                cur = [w]
-        runs.append(cur)
-
+                runs.append([w])
         for k, run in enumerate(runs):
-            segments.append({
-                "start": cs if k == 0 else run[0]["start"],
-                "end": ce if k == len(runs) - 1 else run[-1]["end"],
+            start = cs if k == 0 else run[0]["start"]
+            end = ce if k == len(runs) - 1 else run[-1]["end"]
+            rows.append({
+                "start": start, "end": end,
                 "speaker": run[0]["speaker"],
                 "multi_speaker": len(runs) > 1,
                 "text": " ".join(w["word"] for w in run),
                 "words": run,
+                "pieces": [(start, end)],
+                "sentence_end": int(any(w["is_sentence_end"] for w in run)),
             })
-    segments.sort(key=lambda s: s["start"])
-    return segments
-
-
-def merge_same_speaker_segments(segments: list[dict],
-                                max_gap: float = config.SEGMENT_MERGE_GAP_S) -> list[dict]:
-    """Merge consecutive segments of the same speaker whose gap is shorter
-    than max_gap seconds (never across speakers). A merged segment is
-    multi_speaker if any of its parts was."""
-    merged = []
-    i = 0
-    while i < len(segments):
-        cur = dict(segments[i])
-        cur["words"] = list(segments[i].get("words", []))
-        cur_end = safe_float(cur.get("end"))
-        j = i + 1
-        while j < len(segments):
-            nxt = segments[j]
-            gap = (safe_float(nxt.get("start")) or 0) - (cur_end or 0)
-            if gap < max_gap and nxt.get("speaker") == cur.get("speaker"):
-                cur["end"] = nxt.get("end", cur["end"])
-                cur["text"] = (cur.get("text", "") + " " + nxt.get("text", "")).strip()
-                cur["words"] = cur["words"] + list(nxt.get("words", []))
-                cur["multi_speaker"] = bool(cur.get("multi_speaker")) or bool(nxt.get("multi_speaker"))
-                cur_end = safe_float(nxt.get("end"))
-                j += 1
-            else:
-                break
-        merged.append(cur)
-        i = j
-    return merged
+    rows.sort(key=lambda r: r["start"])
+    return rows

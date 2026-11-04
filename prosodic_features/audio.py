@@ -7,6 +7,11 @@ from typing import Optional, Tuple
 import numpy as np
 
 
+def amplitude_percentile(y: np.ndarray, q: float) -> float:
+    """The q-th percentile of the absolute sample amplitude of y."""
+    return float(np.percentile(np.abs(y), q))
+
+
 def load_audio_mono(path: Path, target_sr: int,
                     max_seconds: Optional[float] = None) -> Tuple[np.ndarray, int]:
     """Read an audio file as float32 mono (mean of the channels), resampled

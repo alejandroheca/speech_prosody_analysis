@@ -27,8 +27,10 @@ For each recording in config.AUDIO_METADATA (its speech file from step 01):
      it overlaps most, and the first / last word of each chunk is moved
      inside the chunk if it crosses it. Each chunk's end is then moved
      back to its last word's end + CHUNK_END_PAD_S (trim_chunk_ends); these
-     trimmed chunks are the ones saved and used from here on (step 03
-     too). Sentences (fit_sentences_to_chunks):
+     trimmed chunks are the ones saved and used from here on (step 05
+     too). A sentence that does not end in . ? ! is joined with the next
+     one if the same speaker goes on within SENTENCE_JOIN_MAX_GAP_S
+     (join_unfinished_sentences). Sentences (fit_sentences_to_chunks):
      a sentence can span chunks, but a piece shorter than
      SENTENCE_FRAGMENT_MAX_S in a chunk shared with the neighbouring
      sentence is an alignment fragment and the sentence leaves that chunk
@@ -39,9 +41,7 @@ Outputs, per recording (config.TRANSCRIPT_DIR; recordings with a JSON are
 skipped):
   <name>.json                 sentences with their words and speakers
   <name>_silero_chunks.txt    Audacity labels: VAD chunks, ends trimmed (step 4)
-  <name>_silero_chunks_original.txt  Audacity labels: VAD chunks as Silero found them
   <name>_words.txt            Audacity labels: words (after step 4)
-  <name>_words_original.txt   Audacity labels: words (before step 4)
   <name>_sentences.txt        Audacity labels: sentences
 and, for diarized recordings (config.DIARIZATION_DIR):
   denoised_<name>_diarization.json, denoised_<name>.rttm
@@ -63,8 +63,8 @@ from prosodic_features.metadata import Recording, clean_stem, load_recordings
 from prosodic_features.speakers import (assign_word_speakers, identify_target_speaker,
                                  load_speaker_turns, rename_speaker, set_segment_speaker)
 from prosodic_features.transcription import (detect_speech_chunks, fit_sentences_to_chunks,
-                                      handle_edge_words, transcribe_joined,
-                                      trim_chunk_ends)
+                                      handle_edge_words, join_unfinished_sentences,
+                                      transcribe_joined, trim_chunk_ends)
 from prosodic_features.utils import format_hms
 
 
@@ -96,33 +96,28 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     stem = clean_stem(audio_path.stem)
     out = {name: config.TRANSCRIPT_DIR / f"{stem}{suffix}" for name, suffix in (
         ("json", ".json"), ("chunks", "_silero_chunks.txt"), ("words", "_words.txt"),
-        ("chunks_original", "_silero_chunks_original.txt"),
-        ("words_original", "_words_original.txt"), ("sentences", "_sentences.txt"))}
+        ("sentences", "_sentences.txt"))}
     print(f"\n{'=' * 60}\n[File] {audio_path.name}  (diarize={is_diarized})")
     if out["json"].exists():
         print(f"  [skip] JSON already exists: {out['json'].name}")
         return
     t_start = time.time()
 
-    # 1. speech chunks (saved right away, in case a later step fails)
+    # 1. speech chunks
     print("  [1/3] Running Silero VAD...")
     audio, chunks = detect_speech_chunks(audio_path, models["vad"])
-    write_audacity_labels(out["chunks_original"], [
-        (c["start"], c["end"], f"chunk_{i:04d} ({c['end'] - c['start']:.2f}s)")
-        for i, c in enumerate(chunks)])
-    print(f"         [saved] {out['chunks_original'].name}")
 
     # 2. transcribe the chunks joined with short silences, in one pass
     print(f"  [2/3] Transcribing {len(chunks)} chunks joined into one audio...")
     audio = audio.numpy() if isinstance(audio, torch.Tensor) else np.asarray(audio)
     sentences = transcribe_joined(audio, chunks, models["whisper"],
                                   models["align"], models["align_meta"])
-    words_original = [w for s in sentences for w in s["words"]]
+    all_words = [w for s in sentences for w in s["words"]]
 
     # 3. speakers, on all words (step 4 keeps these word objects, or copies them)
     target = None       # target speaker identified from the metadata marks
     if not is_diarized:
-        assign_word_speakers(words_original, turns=None, constant=rec.speaker)
+        assign_word_speakers(all_words, turns=None, constant=rec.speaker)
         speaker_source, diarized = rec.speaker, False
     else:
         diarize_if_missing(audio_path, models["diarizer"])
@@ -140,7 +135,7 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
                 rename_speaker(turns, label, rec.speaker)
                 speaker_source += (f"; {label} = {rec.speaker} (talks {talk[label]:.1f} s "
                                    f"of the {marked:.1f} s marked)")
-        assign_word_speakers(words_original, turns=turns, constant=None)
+        assign_word_speakers(all_words, turns=turns, constant=None)
         diarized = True
     print(f"  [speaker] {speaker_source}")
 
@@ -148,6 +143,7 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     #    inside the chunk; sentence times follow
     counts = handle_edge_words(sentences, chunks)
     sentences = [s for s in sentences if s["words"]]
+    sentences, n_joined = join_unfinished_sentences(sentences)
     chunks = trim_chunk_ends(chunks, sentences)
     write_audacity_labels(out["chunks"], [
         (c["start"], c["end"], f"chunk_{i:04d} ({c['end'] - c['start']:.2f}s)")
@@ -158,7 +154,8 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     words = [w for s in sentences for w in s["words"]]
     print(f"  [edges] {counts['moved']} word boundaries moved inside their chunk, "
           f"{counts['dropped']} stray words dropped, {counts['in_gap']} words in a gap; "
-          f"{n_fragments} sentence fragments left to the neighbouring sentence's chunk")
+          f"{n_fragments} sentence fragments left to the neighbouring sentence's chunk; "
+          f"{n_joined} unfinished sentences joined with the next one")
 
     out["json"].write_text(json.dumps({
         "audio_path": str(audio_path),
@@ -177,13 +174,10 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     }, indent=2), encoding="utf-8")
     write_audacity_labels(out["words"], [
         (w["start"], w["end"], w["word"] + _speaker_label(w)) for w in words])
-    write_audacity_labels(out["words_original"], [
-        (w["start"], w["end"], w["word"] + _speaker_label(w)) for w in words_original])
     write_audacity_labels(out["sentences"], [
         (s["start"], s["end"], s["text"].replace("\t", " ").replace("\n", " ") + _speaker_label(s))
         for s in sentences])
-    print(f"  [Saved] {out['json'].name}  (+ silero_chunks.txt, silero_chunks_original.txt, words.txt, "
-          "words_original.txt, sentences.txt)")
+    print(f"  [Saved] {out['json'].name}  (+ silero_chunks.txt, words.txt, sentences.txt)")
     print(f"  [Done]  Elapsed: {format_hms(time.time() - t_start)}")
 
 

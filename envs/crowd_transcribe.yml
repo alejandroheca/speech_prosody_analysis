@@ -1,4 +1,4 @@
-# Step 02 (VAD, transcription, diarization).
+# Steps 02 (VAD, transcription, diarization), 03 (speech quality) and 04 (crowd detection CNN).
 #   conda env create -f envs/crowd_transcribe.yml
 name: crowd_transcribe
 channels:
@@ -8,6 +8,8 @@ dependencies:
   - ffmpeg
   - pandas
   - openpyxl
+  - matplotlib
+  - pyyaml
   - pip
   - pip:
       - torch==2.8.0

@@ -1,17 +1,17 @@
-"""The gap after a segment (until the next segment starts) and the crowd's
-loudness in it: the crowd's reaction to that segment."""
+"""Gaps around a sentence (between its chunks, and after it until the next
+sentence starts) and the crowd's loudness in them: the crowd's reaction."""
 from __future__ import annotations
 
 import numpy as np
 
 from prosodic_features import config
-from prosodic_features.features.opensmile_features import crowd_loudness, ratio_to_file
+from prosodic_features.features.opensmile_features import crowd_loudness
 
 
 def crowd_gap(y_crowd: np.ndarray, sr: int, gap_start: float, gap_end: float,
-              file_crowd_loudness: float, measure_loudness: bool) -> dict:
-    """Gap duration and the crowd loudness in it, relative to the whole
-    crowd track's loudness (ratio_to_file).
+              measure_loudness: bool) -> dict:
+    """Gap duration and the crowd loudness in it (mean eGeMAPS loudness of
+    the gain-normalized crowd signal, see AMPLITUDE_REF_PERCENTILE).
 
     The *_rob versions leave out REVERB_LAG_S at both ends of the gap, so
     the speech's own reverberation and the next segment's onset do not
@@ -33,8 +33,25 @@ def crowd_gap(y_crowd: np.ndarray, sr: int, gap_start: float, gap_end: float,
            "reaction_end": gap_end,
            "crowd_energy": np.nan, "crowd_energy_rob": np.nan}
     if measure_loudness:
-        out["crowd_energy"] = ratio_to_file(crowd_loudness(y_crowd[i_start:i_end], sr),
-                                         file_crowd_loudness)
-        out["crowd_energy_rob"] = ratio_to_file(crowd_loudness(y_crowd[i_rob_start:i_rob_end], sr),
-                                             file_crowd_loudness)
+        out["crowd_energy"] = crowd_loudness(y_crowd[i_start:i_end], sr)
+        out["crowd_energy_rob"] = crowd_loudness(y_crowd[i_rob_start:i_rob_end], sr)
     return out
+
+
+def overlaps_any(start: float, end: float, regions: list[tuple[float, float]]) -> bool:
+    """Whether [start, end] overlaps any of the (start, end) regions."""
+    return any(rs < end and re > start for rs, re in regions)
+
+
+def cnn_gap_energy(y_crowd: np.ndarray, sr: int, gap_start: float, gap_end: float,
+                   cnn_regions: list[tuple[float, float]]) -> dict:
+    """crowd_gap of a gap, with crowd_energy / crowd_energy_rob set to 0 when
+    no CNN crowd region overlaps the gap, or when the gap is too short to
+    measure (shorter than MIN_SEGMENT_S, after the trimming for _rob)."""
+    gap = crowd_gap(y_crowd, sr, gap_start, gap_end, measure_loudness=True)
+    fires = (gap_start is not None and gap_end is not None and gap_end > gap_start
+             and overlaps_any(gap_start, gap_end, cnn_regions))
+    for key in ("crowd_energy", "crowd_energy_rob"):
+        if not fires or np.isnan(gap[key]):
+            gap[key] = 0.0
+    return gap

@@ -14,9 +14,10 @@ def write_audacity_labels(path: Path, labels: list[tuple[float, float, str]]) ->
     Path(path).write_text("\n".join(lines), encoding="utf-8")
 
 
-def read_silero_chunks(path: Path) -> list[tuple[float, float]]:
-    """[(start, end), ...] of a <stem>_silero_chunks.txt label track, sorted
-    by start; lines without valid times (or with end <= start) are skipped."""
+def read_label_spans(path: Path) -> list[tuple[float, float]]:
+    """[(start, end), ...] of a label track (e.g. <stem>_silero_chunks.txt,
+    <stem>_crowd_cnn.txt), sorted by start; lines without valid times (or
+    with end <= start) are skipped."""
     chunks: list[tuple[float, float]] = []
     if not path.exists():
         return chunks

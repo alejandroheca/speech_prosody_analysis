@@ -275,3 +275,39 @@ def fit_sentences_to_chunks(sentences: list[dict], chunks: list[dict],
             if takers[ks[-1]][-1] == i:
                 s["end"] = chunks[ks[-1]]["end"]
     return n_fragments
+
+
+def _main_speaker(sentence: dict):
+    speakers = [w.get("speaker") for w in sentence["words"]]
+    return max(set(speakers), key=speakers.count) if speakers else None
+
+
+def join_unfinished_sentences(sentences: list[dict],
+                              max_gap: float = config.SENTENCE_JOIN_MAX_GAP_S,
+                              end_chars: str = config.SENTENCE_END_CHARS) -> tuple[list[dict], int]:
+    """Join each sentence whose text does not end in one of end_chars, or
+    ends in "..." (WhisperX's mark for speech that trails off) and is
+    followed by a sentence starting in lowercase, with the next one, when both have the same (main) speaker and the next one's
+    first word starts less than max_gap seconds after its last word ends.
+    WhisperX sometimes cuts a sentence at a pause ("Politics as usual" /
+    "has taken it backwards."); joined, its end is the real sentence end.
+    Repeats, so a sentence cut twice is joined whole. Run after
+    handle_edge_words (sentences with words, speakers set) and before
+    fit_sentences_to_chunks. Returns (sentences, number of joins)."""
+    out: list[dict] = []
+    n_joined = 0
+    for s in sentences:
+        if out:
+            prev = out[-1]
+            text, nxt = prev["text"].strip(), s["text"].strip()
+            trails_off = text.endswith("...") and nxt[:1].islower()
+            unfinished = not text.endswith(tuple(end_chars)) or trails_off
+            gap = s["words"][0]["start"] - prev["words"][-1]["end"]
+            if unfinished and gap < max_gap and _main_speaker(prev) == _main_speaker(s):
+                prev["text"] = f"{prev['text'].strip()} {s['text'].strip()}"
+                prev["words"] = prev["words"] + s["words"]
+                prev["end"] = s["end"]
+                n_joined += 1
+                continue
+        out.append(dict(s))
+    return out, n_joined
