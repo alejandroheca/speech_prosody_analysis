@@ -45,13 +45,8 @@ conda env create -f envs/crowd_audio.yml
 conda env create -f envs/crowd_transcribe.yml
 ```
 
-Step 4 uses the crowd-reaction CNN from the parallel repository. Clone it next
-to this one (or set `CROWD_CNN_REPO` to its path) and download its weights:
-
-```
-git clone https://github.com/chymaera96/crowd_reaction_analysis ../crowd_reaction_analysis
-cd ../crowd_reaction_analysis && python scripts/download_weights.py --model cnn_tcn
-```
+Step 4 uses the CNN–TCN package installed by `crowd_transcribe.yml`.
+Its weights download automatically on first use; no separate checkout is needed.
 
 ## Models
 

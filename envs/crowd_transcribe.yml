@@ -4,7 +4,7 @@ name: crowd_transcribe
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python=3.13
   - ffmpeg
   - pandas
   - openpyxl
@@ -15,6 +15,7 @@ dependencies:
       - torch==2.8.0
       - torchaudio==2.8.0
       - soundfile==0.13.1
+      - crowd-reaction-analysis @ https://github.com/chymaera96/crowd_reaction_analysis/releases/download/v0.2.0/crowd_reaction_analysis-0.2.0-py3-none-any.whl
       - whisperx==3.8.6
       - silero-vad==6.2.1
       - pyannote.audio==4.0.4

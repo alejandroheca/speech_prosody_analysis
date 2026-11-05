@@ -18,9 +18,6 @@ from pathlib import Path
 REPO_DIR   = Path(__file__).resolve().parent.parent
 DATA_DIR   = Path(os.environ.get("CROWD_DATA_DIR", REPO_DIR / "data"))
 MODELS_DIR = Path(os.environ.get("CROWD_MODELS_DIR", REPO_DIR / "models"))
-# Clone of github.com/chymaera96/crowd_reaction_analysis (step 04, crowd
-# detection). Default: next to this repository.
-CNN_REPO_DIR = Path(os.environ.get("CROWD_CNN_REPO", REPO_DIR.parent / "crowd_reaction_analysis"))
 
 # ---------------------------------------------------------------------------
 # Recordings metadata: one row per recording; every step processes the
@@ -114,8 +111,6 @@ SQUIM_MIN_WINDOW_S = 0.5        # shorter windows are skipped
 # Step 04, recordings with ACTIVE_CROWD: crowd detection (CNN-TCN of
 # crowd_reaction_analysis, event head, on the original recording)
 # ---------------------------------------------------------------------------
-CNN_CONFIG       = "configs/cnn_tcn.yaml"   # relative to CNN_REPO_DIR
-CNN_CHECKPOINT   = "weights/cnn_tcn.pt"     # relative to CNN_REPO_DIR (scripts/download_weights.py)
 CNN_DEVICE       = "cpu"
 CNN_BATCH_SIZE   = 1
 CNN_MEDIAN_FILTER_S = 3.0       # smoothing of the detected regions (the CNN's default)
