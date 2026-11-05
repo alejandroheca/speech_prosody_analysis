@@ -146,93 +146,46 @@ and falls back to the CPU when needed.
 
 ## Outputs
 
-All outputs are written inside the data folder:
-
 ```
 data/
-  audio/separated/denoised/pass01/denoised_<name>.flac       speech (step 1)
-  audio/separated/noise/pass01/noise_<name>.flac             crowd (step 1)
-  derived/diarization/denoised_<name>_diarization.json, .rttm speaker turns (step 2)
-  derived/transcripts/<name>.json                            sentences, words, times, speakers (step 2)
-  derived/transcripts/<name>_*.txt                           label tracks (step 2)
-  derived/crowd_cnn/<name>_crowd_cnn.txt                     crowd regions, label track (step 4)
-  derived/features/<name>_<unit>_features.csv                one row per chunk / sentence (step 5)
-  recordings_done.csv                                        one row per processed recording (steps 3, 5)
+  audio/separated/denoised/pass01/denoised_<name>.flac   speech (step 1)
+  audio/separated/noise/pass01/noise_<name>.flac         crowd (step 1)
+  derived/diarization/                                   speaker turns, diarized recordings only (step 2)
+  derived/transcripts/<name>.json                        sentences and words, with times and speakers (step 2)
+  derived/transcripts/<name>_*.txt                       label tracks: chunks, words, sentences (step 2)
+  derived/crowd_cnn/<name>_crowd_cnn.txt                 crowd regions, label track (step 4)
+  derived/features/<name>_chunk_features.csv             one row per speech chunk (step 5)
+  derived/features/<name>_sentence_features.csv          one row per sentence (step 5)
+recordings_done.csv (next to recordings.xlsx)            one row per recording: speaker, duration,
+                                                         diarized, speech_quality (steps 3, 5)
 ```
 
-Diarization files exist only for diarized recordings. The label tracks are
-`_silero_chunks.txt` (speech chunks; chunks less than `SILERO_MERGE_GAP_S` =
-0.05 s apart are joined, and each chunk ends `CHUNK_END_PAD_S` = 0.03 s after
-its last word), `_words.txt` (words after the edge-word check: stray
-hallucinated words at a sentence's edges removed, and each chunk's first and
-last word kept inside the chunk), and `_sentences.txt` (a sentence is ended at a pause of `SENTENCE_SPLIT_MIN_GAP_S` = 5 s or more
-after a word without punctuation, where WhisperX stopped punctuating; a sentence not ending in `.`, `?` or `!`, or
-followed by a sentence starting in lowercase, is joined with the next one if the same speaker goes on within
-`SENTENCE_JOIN_MAX_GAP_S` = 3 s; a sentence can span several chunks, but not by a
-fragment shorter than `SENTENCE_FRAGMENT_MAX_S` = 0.5 s into a chunk it shares
-with the neighbouring sentence; the first sentence of each chunk starts at the
-chunk's start and the last one ends at the chunk's end). Load the separated audio in Audacity, then import a label
-track to check it by listening.
+The `.txt` label tracks can be imported in Audacity, next to the audio, to
+check the results by listening.
 
-Step 5 writes two tables per recording, `<name>_chunk_features.csv` and
-`<name>_sentence_features.csv` (the environment variable
-`CROWD_FEATURES_UNIT=chunk` or `=sentence` writes only one):
+### Feature tables
 
-- `chunk`: one row per Silero chunk; a chunk where the speaker
-  changes is split into one row per speaker. The row is its own voiced part.
-- `sentence`: one row per sentence. A sentence's voiced parts are the Silero
-  chunks it spans, cut to the sentence's own start and end (a sentence inside
-  a longer chunk keeps only its part).
+Speech features use only the voiced parts of each row (its Silero chunks);
+crowd features use the gaps after it. Columns empty on every row (e.g. the
+crowd ones when `ACTIVE_CROWD = 0`) are left out.
 
-All speech features use only the voiced parts; the crowd features use the gaps.
-A column that is empty on every row (e.g. the crowd ones when
-`ACTIVE_CROWD = 0`) is left out of the table.
+| Column | Meaning |
+|---|---|
+| `start`, `end`, `speaker`, `text` | the chunk or sentence |
+| `multi_speaker` | words of more than one speaker |
+| `speech_quality` | the recording's speech quality (PESQ, 1–4.5), same on every row |
+| `sentence_end` / `n_chunks` | chunks: ends a sentence / sentences: number of chunks |
+| `duration`, `n_words`, `word_rate` | voiced duration, words, words per second |
+| `gap_duration`, `reaction_end` | the gap until the next row |
+| `crowd_energy_end` | crowd loudness in the gap after the row |
+| `crowd_energy_around` | sentences only: crowd loudness in the gaps inside and after the sentence |
+| `crowd_energy_end_rob_lag` | `crowd_energy_end_rob` of the previous row |
+| `sp_<feature>` | the 88 eGeMAPS features of the speech |
 
-- `start`, `end`, `speaker`, `multi_speaker`, `text`: the row. `multi_speaker`
-  marks chunks cut where the speaker changes, or sentences with words of
-  several speakers.
-- `speech_quality`: the recording's speech quality (the same on every row),
-  see below.
-- `sentence_end` (chunks only): the chunk ends a sentence. `n_chunks`
-  (sentences only): the sentence's number of voiced parts.
-- `duration`, `n_words`, `word_rate`: total duration of the voiced parts, and
-  words per second of it.
-- `gap_duration`, `gap_duration_rob`, `reaction_end`: the end gap, from the
-  row's end to the next row's start. The `_rob` versions leave out
-  50 ms at each end of the gap.
-- `crowd_energy_end`, `crowd_energy_end_rob`: crowd loudness in the end gap
-  (eGeMAPS `loudness_sma3_amean` of the gain-normalized crowd track).
-- `crowd_energy_around`, `crowd_energy_around_rob` (sentences only): the sum
-  of the crowd loudness in the gaps between the sentence's voiced parts and in
-  its end gap.
-- In both, a gap counts only if a crowd region from step 4 overlaps it;
-  otherwise, or if it is shorter than `MIN_SEGMENT_S` (0.25 s), it counts as 0.
-  The `_rob` versions measure each gap without 50 ms at each end. They are
-  computed only when `ACTIVE_CROWD = 1`, and never for a `multi_speaker`
-  row (empty otherwise).
-- `crowd_energy_end_rob_lag`: `crowd_energy_end_rob` of the previous row.
-  For the first row, it is the crowd before the speech starts.
-- `sp_<eGeMAPS feature>`: the 88 eGeMAPS v02 functionals of the voiced parts,
-  on the gain-normalized speech track.
-
-Gain normalization: both tracks are divided by the `AMPLITUDE_REF_PERCENTILE`
-(99th) percentile of the absolute sample amplitude of the whole original
-recording, before separation. A high percentile rather than the maximum, so a
-single spike does not set the scale.
-
-Speech quality (`speech_quality`): the perceived quality of the speech, PESQ
-from 1 (bad) to 4.5 (excellent), covering noise, distortion and band-limiting.
-It is estimated in step 3 by
-[TorchAudio-Squim](https://pytorch.org/audio/stable/tutorials/squim_tutorial.html)
-(objective model) from the denoised speech (step 1) alone, without a clean
-reference, on its voiced Silero chunks (in windows of at most 10 s, averaged
-weighted by duration).
-
-`recordings_done.csv`, next to the metadata file (`recordings.xlsx`), has one
-row per processed recording: step 3 writes its `speech_quality`, and step 5
-reads it from there and adds the rest: `file`,
-`speaker` (the file name's prefix), `duration` (seconds), `diarized` (1 / 0),
-and `speech_quality`.
+`_rob` versions leave out 50 ms at each end of a gap. Crowd loudness counts
+only in gaps where step 4 found a crowd reaction (0 otherwise). Both audio
+tracks are divided by the 99th percentile of the original recording's
+amplitude, so recordings with different gain are comparable.
 
 ## Repository structure
 
