@@ -1,7 +1,6 @@
 """Step 02: speech chunks (Silero VAD) and their words (WhisperX)."""
 from __future__ import annotations
 
-import bisect
 import difflib
 import re
 from pathlib import Path
@@ -59,55 +58,26 @@ def merge_close_chunks(chunks: list[dict], max_gap: float) -> list[dict]:
     return merged
 
 
-def join_chunks(audio: np.ndarray, chunks: list[dict], gap_s: float,
-                sr: int) -> tuple[np.ndarray, list[float]]:
-    """The audio of the chunks, in order, with gap_s seconds of silence
-    between consecutive chunks. Returns (joined, piece_starts):
-    piece_starts[i] is where chunk i begins in the joined audio (s)."""
-    gap = np.zeros(int(round(gap_s * sr)), dtype=np.float32)
-    pieces, piece_starts, pos = [], [], 0
-    for i, c in enumerate(chunks):
-        piece = np.asarray(audio[int(c["start"] * sr):int(c["end"] * sr)], dtype=np.float32)
-        piece_starts.append(pos / sr)
-        pieces.append(piece)
-        pos += len(piece)
-        if i < len(chunks) - 1:
-            pieces.append(gap)
-            pos += len(gap)
-    return (np.concatenate(pieces) if pieces else np.zeros(0, np.float32)), piece_starts
-
-
-def to_original_time(t: float, chunks: list[dict], piece_starts: list[float]) -> float:
-    """A time of the joined audio on the recording's timeline: it keeps the
-    offset of the chunk it falls in. A time inside an inserted silence keeps
-    the offset of the chunk before it (it lands at the start of that
-    chunk's following gap)."""
-    i = max(bisect.bisect_right(piece_starts, t + 1e-9) - 1, 0)
-    return round(chunks[i]["start"] + (t - piece_starts[i]), 4)
-
-
-def transcribe_joined(audio: np.ndarray, chunks: list[dict], whisper_model,
-                      align_model, align_meta) -> list[dict]:
-    """Transcribe the speech chunks with WhisperX in one pass, as one audio:
-    the chunks joined with CHUNK_JOIN_GAP_S of silence between them, so
-    WhisperX finds the sentences itself (a sentence can span chunks) and
-    never hears the long pauses and crowd noise between chunks. Words are
-    aligned on the joined audio and their times put back on the
-    recording's timeline (to_original_time); nothing else is changed.
+def transcribe(audio: np.ndarray, whisper_model, align_model, align_meta) -> list[dict]:
+    """Transcribe the whole recording with WhisperX (it cuts it into its
+    decoding windows with its own VAD, WHISPER_VAD_METHOD) and align the
+    words on the recording itself, so each word lands where it was spoken.
+    The Silero chunks are not used here: the words are fitted to them
+    afterwards (handle_edge_words). audio: 16 kHz mono, cut to
+    TRANSCRIBE_MAX_SECONDS if set.
 
     Returns [{start, end, text, words: [{start, end, word}, ...]}, ...]."""
     import whisperx
 
-    joined, piece_starts = join_chunks(audio, chunks, config.CHUNK_JOIN_GAP_S, config.SILERO_SR)
-    print(f"         {len(chunks)} chunks joined with {config.CHUNK_JOIN_GAP_S}s of silence: "
-          f"{len(joined) / config.SILERO_SR:.1f}s of audio")
-    result = whisper_model.transcribe(joined, language=config.WHISPER_LANGUAGE)
+    audio = np.asarray(audio, dtype=np.float32)
+    if config.TRANSCRIBE_MAX_SECONDS is not None:
+        audio = audio[: int(config.TRANSCRIBE_MAX_SECONDS * config.SILERO_SR)]
+    result = whisper_model.transcribe(audio, language=config.WHISPER_LANGUAGE)
     if not result.get("segments"):
         return []
     aligned = whisperx.align(result["segments"], align_model, align_meta,
-                             joined, config.WHISPER_DEVICE,
+                             audio, config.WHISPER_DEVICE,
                              return_char_alignments=False)
-    orig = lambda t: to_original_time(t, chunks, piece_starts)
     out = []
     for seg in aligned.get("segments", []):
         seg_start = safe_float(seg.get("start"))
@@ -121,8 +91,8 @@ def transcribe_joined(audio: np.ndarray, chunks: list[dict], whisper_model,
             txt = (w.get("word") or "").strip()
             if ws is None or we is None or not txt:
                 continue
-            words.append({"start": orig(ws), "end": orig(we), "word": txt})
-        out.append({"start": orig(seg_start), "end": orig(seg_end),
+            words.append({"start": ws, "end": we, "word": txt})
+        out.append({"start": seg_start, "end": seg_end,
                     "text": (seg.get("text") or "").strip(), "words": words})
     return out
 
@@ -275,6 +245,40 @@ def fit_sentences_to_chunks(sentences: list[dict], chunks: list[dict],
             if takers[ks[-1]][-1] == i:
                 s["end"] = chunks[ks[-1]]["end"]
     return n_fragments
+
+
+def split_at_long_pauses(sentences: list[dict],
+                         min_gap: float = config.SENTENCE_SPLIT_MIN_GAP_S) -> tuple[list[dict], int]:
+    """End a sentence at a pause of at least min_gap seconds between two of
+    its words when the word before the pause has no punctuation: WhisperX
+    sometimes stops punctuating for a while and runs several sentences into
+    one ("...like a mighty stream [9.6 s] i am not unmindful..."). A comma
+    before the pause means the sentence goes on ("my friends, [applause]
+    so even though..."), so it is kept. The word before the pause gets a
+    "." and the first word after it a capital; each part's text is its
+    words. Run on WhisperX's sentences, before handle_edge_words.
+    Returns (sentences, number of splits)."""
+    out: list[dict] = []
+    n_split = 0
+    for s in sentences:
+        words, start = s["words"], 0
+        for i in range(1, len(words)):
+            prev = words[i - 1]["word"]
+            if (words[i]["start"] - words[i - 1]["end"] >= min_gap
+                    and prev[-1:].isalnum()):
+                words[i - 1] = {**words[i - 1], "word": prev + "."}
+                nxt = words[i]["word"]
+                words[i] = {**words[i], "word": nxt[:1].upper() + nxt[1:]}
+                out.append(_sentence_of(words[start:i]))
+                start = i
+                n_split += 1
+        out.append(_sentence_of(words[start:]) if start else s)
+    return out, n_split
+
+
+def _sentence_of(words: list[dict]) -> dict:
+    return {"start": words[0]["start"], "end": words[-1]["end"],
+            "text": " ".join(w["word"] for w in words), "words": words}
 
 
 def _main_speaker(sentence: dict):

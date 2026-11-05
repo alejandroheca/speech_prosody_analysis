@@ -1,6 +1,6 @@
 """Step 03: speech quality of a recording, without a reference: PESQ
-estimated by the TorchAudio-Squim objective model from the original
-recording alone, on its voiced Silero chunks."""
+estimated by the TorchAudio-Squim objective model from the denoised speech
+(step 01) alone, on its voiced Silero chunks."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,15 +31,15 @@ def _load_16k_mono(path: Path) -> np.ndarray:
     return y.numpy()
 
 
-def speech_quality(raw_path: Path, chunks: list[tuple[float, float]]) -> float:
+def speech_quality(speech_path: Path, chunks: list[tuple[float, float]]) -> float:
     """Perceived speech quality (PESQ, from 1 = bad to 4.5 = excellent: noise,
-    distortion, band-limiting) of the original recording (raw_path),
+    distortion, band-limiting) of the denoised speech (speech_path),
     estimated by Squim on the Silero chunks only (speech, not silence or
     crowd-only stretches), each cut into windows of at most SQUIM_WINDOW_S;
     windows shorter than SQUIM_MIN_WINDOW_S are skipped. The mean over
     windows weighted by duration; NaN if no window could be scored."""
     import torch
-    y = _load_16k_mono(raw_path)
+    y = _load_16k_mono(speech_path)
     sr = config.SQUIM_SR
     win, min_win = int(config.SQUIM_WINDOW_S * sr), int(config.SQUIM_MIN_WINDOW_S * sr)
     scores, weights = [], []

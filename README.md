@@ -129,8 +129,8 @@ python 05_features.py
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
-| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), joins them into one audio with 0.1 s of silence between them, transcribes and word-aligns it in one pass (WhisperX), keeps each chunk's first and last word inside the chunk, joins sentences WhisperX cut at a pause, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
-| 3 | `03_quality.py` | Estimates the speech quality of the original recording, without a reference, on its speech chunks: PESQ from 1 (bad) to 4.5 (excellent), by TorchAudio-Squim, written to `recordings_done.csv`. |
+| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns the whole recording in one pass (WhisperX), fits the words to the chunks (each chunk's first and last word kept inside it), joins sentences WhisperX cut at a pause, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
+| 3 | `03_quality.py` | Estimates the speech quality of the denoised speech, without a reference, on its speech chunks: PESQ from 1 (bad) to 4.5 (excellent), by TorchAudio-Squim, written to `recordings_done.csv`. |
 | 4 | `04_crowd_detection.py` | In recordings with `ACTIVE_CROWD = 1`, runs the crowd-reaction CNN (CNN-TCN, crowd-event head) on the original recording and keeps the crowd regions with a mean probability above `CNN_MIN_MEAN_SCORE` (0.8). |
 | 5 | `05_features.py` | Normalizes the gain of the speech and crowd tracks, then computes, per chunk and per sentence (one table each), eGeMAPS (openSMILE) and speech rate on its voiced parts, and the duration and crowd loudness of its gaps. |
 
@@ -165,7 +165,8 @@ Diarization files exist only for diarized recordings. The label tracks are
 0.05 s apart are joined, and each chunk ends `CHUNK_END_PAD_S` = 0.03 s after
 its last word), `_words.txt` (words after the edge-word check: stray
 hallucinated words at a sentence's edges removed, and each chunk's first and
-last word kept inside the chunk), and `_sentences.txt` (a sentence not ending in `.`, `?` or `!`, or
+last word kept inside the chunk), and `_sentences.txt` (a sentence is ended at a pause of `SENTENCE_SPLIT_MIN_GAP_S` = 5 s or more
+after a word without punctuation, where WhisperX stopped punctuating; a sentence not ending in `.`, `?` or `!`, or
 followed by a sentence starting in lowercase, is joined with the next one if the same speaker goes on within
 `SENTENCE_JOIN_MAX_GAP_S` = 3 s; a sentence can span several chunks, but not by a
 fragment shorter than `SENTENCE_FRAGMENT_MAX_S` = 0.5 s into a chunk it shares
@@ -223,7 +224,7 @@ Speech quality (`speech_quality`): the perceived quality of the speech, PESQ
 from 1 (bad) to 4.5 (excellent), covering noise, distortion and band-limiting.
 It is estimated in step 3 by
 [TorchAudio-Squim](https://pytorch.org/audio/stable/tutorials/squim_tutorial.html)
-(objective model) from the original recording alone, without a clean
+(objective model) from the denoised speech (step 1) alone, without a clean
 reference, on its voiced Silero chunks (in windows of at most 10 s, averaged
 weighted by duration).
 

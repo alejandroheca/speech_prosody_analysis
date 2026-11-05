@@ -80,12 +80,13 @@ SILERO_MIN_SPEECH_MS  = 500
 SILERO_MIN_SILENCE_MS = 50
 SILERO_SPEECH_PAD_MS  = 30      # padding (ms) added to both ends of each chunk (Silero's default)
 SILERO_MERGE_GAP_S    = 0.05    # chunks closer than this (s) are joined into one
-CHUNK_JOIN_GAP_S      = 0.1     # silence (s) between chunks in the audio given to WhisperX
 CHUNK_END_PAD_S       = 0.03    # after transcription, a chunk ends this long after its last word
 SENTENCE_FRAGMENT_MAX_S = 0.5   # a sentence piece shorter than this in a chunk shared with
                                 # the neighbouring sentence is a fragment (see fit_sentences_to_chunks)
 SENTENCE_END_CHARS = ".?!"      # a sentence not ending in one of these (or followed by one
                                 # starting in lowercase) is unfinished...
+SENTENCE_SPLIT_MIN_GAP_S = 5.0  # a pause this long (s) after a word without punctuation ends the
+                                # sentence (see split_at_long_pauses)
 SENTENCE_JOIN_MAX_GAP_S = 3.0   # ...and joined with the next one if the same speaker
                                 # goes on within this many seconds (see join_unfinished_sentences)
 
@@ -93,7 +94,7 @@ WHISPER_MODEL        = "large-v3"
 WHISPER_DEVICE       = "cpu"
 WHISPER_COMPUTE_TYPE = "int8"
 WHISPER_LANGUAGE     = "en"
-# VAD WhisperX uses to cut the (joined) audio into its <= 30 s decoding windows.
+# VAD WhisperX uses to cut the recording into its <= 30 s decoding windows.
 # "silero" (not WhisperX's default, "pyannote"): with pyannote, a window at the
 # start of a recording could decode as dots only and lose its speech.
 WHISPER_VAD_METHOD   = "silero"
