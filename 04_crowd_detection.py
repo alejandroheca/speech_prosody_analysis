@@ -5,8 +5,7 @@ crowd.
     conda activate crowd_transcribe
     python 04_crowd_detection.py
 
-Needs a clone of github.com/chymaera96/crowd_reaction_analysis (with its
-cnn_tcn weights) next to this repository, or at CROWD_CNN_REPO.
+Uses the installed crowd-reaction package; CNN-TCN weights download on first use.
 
 For each recording in config.AUDIO_METADATA with ACTIVE_CROWD = 1, the
 CNN-TCN runs on the original recording (data/audio/raw) and its crowd
