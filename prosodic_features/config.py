@@ -84,8 +84,8 @@ CHUNK_JOIN_GAP_S      = 0.1     # silence (s) between chunks in the audio given 
 CHUNK_END_PAD_S       = 0.03    # after transcription, a chunk ends this long after its last word
 SENTENCE_FRAGMENT_MAX_S = 0.5   # a sentence piece shorter than this in a chunk shared with
                                 # the neighbouring sentence is a fragment (see fit_sentences_to_chunks)
-SENTENCE_END_CHARS = ".?!"      # a sentence not ending in one of these (or ending in "..." with
-                                # the next one starting in lowercase) is unfinished...
+SENTENCE_END_CHARS = ".?!"      # a sentence not ending in one of these (or followed by one
+                                # starting in lowercase) is unfinished...
 SENTENCE_JOIN_MAX_GAP_S = 3.0   # ...and joined with the next one if the same speaker
                                 # goes on within this many seconds (see join_unfinished_sentences)
 
@@ -124,11 +124,13 @@ CNN_MIN_MEAN_SCORE  = 0.8       # keep only regions whose mean crowd probability
 # Step 05: acoustic features
 # ---------------------------------------------------------------------------
 FEATURES_SR        = 16000
-# Rows of the features table: "chunk" (one per Silero chunk, split where the
-# speaker changes) or "sentence" (one per transcript sentence, on the chunks
-# it spans; adds the crowd_energy_around measures). Can be set with the
-# environment variable CROWD_FEATURES_UNIT.
-FEATURES_UNIT      = os.environ.get("CROWD_FEATURES_UNIT", "chunk")
+# Feature tables written per recording, one per unit of rows: "chunk" (one
+# row per Silero chunk, split where the speaker changes) and "sentence" (one
+# row per transcript sentence, on the chunks it spans; adds the
+# crowd_energy_around measures). Both by default; the environment variable
+# CROWD_FEATURES_UNIT=chunk (or =sentence) writes only that one.
+FEATURES_UNITS     = tuple(u for u in ("chunk", "sentence")
+                           if os.environ.get("CROWD_FEATURES_UNIT", "both") in (u, "both"))
 # Segments processed in parallel. ADAPT TO YOUR MACHINE: default = all cores
 # but one; lower it to keep the computer usable or on a shared server.
 FEATURES_N_WORKERS = max(1, mp.cpu_count() - 1)

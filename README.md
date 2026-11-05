@@ -16,8 +16,8 @@ The pipeline takes a recording (`.flac` recommended; `.wav` also accepted) and:
 4. in recordings with an active crowd (`ACTIVE_CROWD = 1`), detects crowd
    reactions with the CNN of
    [crowd_reaction_analysis](https://github.com/chymaera96/crowd_reaction_analysis);
-5. computes prosodic features for every speech chunk or every sentence (your
-   choice, `FEATURES_UNIT`), on its voiced parts only: the eGeMAPS set, plus
+5. computes prosodic features for every speech chunk and for every sentence
+   (one table each), on their voiced parts only: the eGeMAPS set, plus
    rhythm measures not in eGeMAPS (number of words, speech rate, and the
    duration of the gap after it).
 
@@ -132,7 +132,7 @@ python 05_features.py
 | 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), joins them into one audio with 0.1 s of silence between them, transcribes and word-aligns it in one pass (WhisperX), keeps each chunk's first and last word inside the chunk, joins sentences WhisperX cut at a pause, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
 | 3 | `03_quality.py` | Estimates the speech quality of the original recording, without a reference, on its speech chunks: PESQ from 1 (bad) to 4.5 (excellent), by TorchAudio-Squim, written to `recordings_done.csv`. |
 | 4 | `04_crowd_detection.py` | In recordings with `ACTIVE_CROWD = 1`, runs the crowd-reaction CNN (CNN-TCN, crowd-event head) on the original recording and keeps the crowd regions with a mean probability above `CNN_MIN_MEAN_SCORE` (0.8). |
-| 5 | `05_features.py` | Normalizes the gain of the speech and crowd tracks, then computes, per chunk or sentence (`FEATURES_UNIT`), eGeMAPS (openSMILE) and speech rate on its voiced parts, and the duration and crowd loudness of its gaps. |
+| 5 | `05_features.py` | Normalizes the gain of the speech and crowd tracks, then computes, per chunk and per sentence (one table each), eGeMAPS (openSMILE) and speech rate on its voiced parts, and the duration and crowd loudness of its gaps. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
 can be restarted. `SEPARATE_N_WORKERS` and `FEATURES_N_WORKERS` in `config.py`
@@ -156,7 +156,7 @@ data/
   derived/transcripts/<name>.json                            sentences, words, times, speakers (step 2)
   derived/transcripts/<name>_*.txt                           label tracks (step 2)
   derived/crowd_cnn/<name>_crowd_cnn.txt                     crowd regions, label track (step 4)
-  derived/features/<name>_<unit>_features.csv                one row per chunk or sentence (step 5)
+  derived/features/<name>_<unit>_features.csv                one row per chunk / sentence (step 5)
   recordings_done.csv                                        one row per processed recording (steps 3, 5)
 ```
 
@@ -166,24 +166,26 @@ Diarization files exist only for diarized recordings. The label tracks are
 its last word), `_words.txt` (words after the edge-word check: stray
 hallucinated words at a sentence's edges removed, and each chunk's first and
 last word kept inside the chunk), and `_sentences.txt` (a sentence not ending in `.`, `?` or `!`, or
-ending in `...` before a sentence starting in lowercase, is joined with the next one if the same speaker goes on within
+followed by a sentence starting in lowercase, is joined with the next one if the same speaker goes on within
 `SENTENCE_JOIN_MAX_GAP_S` = 3 s; a sentence can span several chunks, but not by a
 fragment shorter than `SENTENCE_FRAGMENT_MAX_S` = 0.5 s into a chunk it shares
 with the neighbouring sentence; the first sentence of each chunk starts at the
 chunk's start and the last one ends at the chunk's end). Load the separated audio in Audacity, then import a label
 track to check it by listening.
 
-`<name>_<unit>_features.csv` has one row per chunk or sentence, set by
-`FEATURES_UNIT` in `config.py` (or the environment variable
-`CROWD_FEATURES_UNIT`):
+Step 5 writes two tables per recording, `<name>_chunk_features.csv` and
+`<name>_sentence_features.csv` (the environment variable
+`CROWD_FEATURES_UNIT=chunk` or `=sentence` writes only one):
 
-- `chunk` (default): one row per Silero chunk; a chunk where the speaker
+- `chunk`: one row per Silero chunk; a chunk where the speaker
   changes is split into one row per speaker. The row is its own voiced part.
 - `sentence`: one row per sentence. A sentence's voiced parts are the Silero
   chunks it spans, cut to the sentence's own start and end (a sentence inside
   a longer chunk keeps only its part).
 
 All speech features use only the voiced parts; the crowd features use the gaps.
+A column that is empty on every row (e.g. the crowd ones when
+`ACTIVE_CROWD = 0`) is left out of the table.
 
 - `start`, `end`, `speaker`, `multi_speaker`, `text`: the row. `multi_speaker`
   marks chunks cut where the speaker changes, or sentences with words of

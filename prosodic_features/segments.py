@@ -1,4 +1,4 @@
-"""Step 05: the rows of the features table (config.FEATURES_UNIT), each with
+"""Step 05: the rows of the features table (config.FEATURES_UNITS), each with
 its voiced pieces:
   chunk     one row per Silero chunk, split where the speaker changes
             inside it (load_chunks)

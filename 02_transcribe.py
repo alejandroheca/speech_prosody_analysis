@@ -28,8 +28,8 @@ For each recording in config.AUDIO_METADATA (its speech file from step 01):
      inside the chunk if it crosses it. Each chunk's end is then moved
      back to its last word's end + CHUNK_END_PAD_S (trim_chunk_ends); these
      trimmed chunks are the ones saved and used from here on (step 05
-     too). A sentence that does not end in . ? ! is joined with the next
-     one if the same speaker goes on within SENTENCE_JOIN_MAX_GAP_S
+     too). A sentence that does not end in . ? ! (or is followed by one
+     starting in lowercase) is joined with the next one if the same speaker goes on within SENTENCE_JOIN_MAX_GAP_S
      (join_unfinished_sentences). Sentences (fit_sentences_to_chunks):
      a sentence can span chunks, but a piece shorter than
      SENTENCE_FRAGMENT_MAX_S in a chunk shared with the neighbouring

@@ -285,12 +285,14 @@ def _main_speaker(sentence: dict):
 def join_unfinished_sentences(sentences: list[dict],
                               max_gap: float = config.SENTENCE_JOIN_MAX_GAP_S,
                               end_chars: str = config.SENTENCE_END_CHARS) -> tuple[list[dict], int]:
-    """Join each sentence whose text does not end in one of end_chars, or
-    ends in "..." (WhisperX's mark for speech that trails off) and is
-    followed by a sentence starting in lowercase, with the next one, when both have the same (main) speaker and the next one's
+    """Join a sentence with the next one when it is unfinished: its text
+    does not end in one of end_chars, or the next one starts in lowercase
+    (whatever the punctuation before it: WhisperX puts a "." or "..." at
+    a pause inside a sentence, as in "This is no time." / "to engage in
+    ..."). Only when both have the same (main) speaker and the next one's
     first word starts less than max_gap seconds after its last word ends.
-    WhisperX sometimes cuts a sentence at a pause ("Politics as usual" /
-    "has taken it backwards."); joined, its end is the real sentence end.
+    Joined, the sentence's end is the real sentence end; before a lowercase
+    start, the period(s) at the pause are dropped from the text.
     Repeats, so a sentence cut twice is joined whole. Run after
     handle_edge_words (sentences with words, speakers set) and before
     fit_sentences_to_chunks. Returns (sentences, number of joins)."""
@@ -300,11 +302,12 @@ def join_unfinished_sentences(sentences: list[dict],
         if out:
             prev = out[-1]
             text, nxt = prev["text"].strip(), s["text"].strip()
-            trails_off = text.endswith("...") and nxt[:1].islower()
-            unfinished = not text.endswith(tuple(end_chars)) or trails_off
+            unfinished = not text.endswith(tuple(end_chars)) or nxt[:1].islower()
             gap = s["words"][0]["start"] - prev["words"][-1]["end"]
             if unfinished and gap < max_gap and _main_speaker(prev) == _main_speaker(s):
-                prev["text"] = f"{prev['text'].strip()} {s['text'].strip()}"
+                if nxt[:1].islower():
+                    text = text.rstrip(".")     # WhisperX's period at the pause
+                prev["text"] = f"{text} {nxt}"
                 prev["words"] = prev["words"] + s["words"]
                 prev["end"] = s["end"]
                 n_joined += 1
