@@ -1,6 +1,7 @@
 """The summary table of processed recordings (config.RECORDINGS_DONE_CSV,
 next to the metadata file): one row per recording, keyed by "file".
-Step 03 writes speech_quality; step 05 adds speaker, duration and diarized."""
+Steps 03 and 05 write it: step 03 the whole row, step 05 speaker, duration and
+diarized again."""
 from __future__ import annotations
 
 import numpy as np

@@ -3,20 +3,23 @@ Step 04: crowd reactions detected by the CNN, in recordings with an active
 crowd.
 
     conda activate crowd_transcribe
-    python 04_crowd_detection.py
+    python 04_crowd_detection.py                  (every recording)
+    python 04_crowd_detection.py <stem> [<stem>]  (only these)
 
 Uses the installed crowd-reaction package; CNN-TCN weights download on first use.
 
 For each recording in config.AUDIO_METADATA with ACTIVE_CROWD = 1, the
-CNN-TCN runs on the original recording (data/audio/raw) and its crowd
-regions with a mean probability above CNN_MIN_MEAN_SCORE are saved. Step 05
-measures crowd loudness only in the gaps these regions overlap.
+CNN-TCN runs on the original recording (data/audio/raw) and all its crowd
+regions are saved, each with its mean probability. Step 05 keeps those with a
+mean of at least config.CROWD_MIN_MEAN_SCORE as crowd reactions and measures
+crowd loudness only in the gaps they overlap.
 
 Output (existing outputs are skipped):
   config.CROWD_CNN_DIR/<name>_crowd_cnn.txt   Audacity labels: "crowd mean=<p>"
 """
 from __future__ import annotations
 
+import sys
 import time
 
 from prosodic_features import config
@@ -30,6 +33,8 @@ from prosodic_features.utils import format_hms
 def main() -> None:
     config.CROWD_CNN_DIR.mkdir(parents=True, exist_ok=True)
     recordings = [r for r in load_recordings() if r.crowd]
+    if sys.argv[1:]:
+        recordings = [r for r in recordings if r.stem in sys.argv[1:]]
     print(f"[Batch] {len(recordings)} recordings with ACTIVE_CROWD = 1")
     t_batch = time.time()
     for i, rec in enumerate(recordings, 1):
@@ -48,7 +53,7 @@ def main() -> None:
         except Exception as e:
             print(f"  [ERROR] {e}")
             continue
-        write_audacity_labels(out, [(s, e, f"crowd mean={p:.2f}") for s, e, p in regions])
+        write_audacity_labels(out, [(s, e, f"crowd mean={p:.3f}") for s, e, p in regions])
         print(f"  [Saved] {out.name}: {len(regions)} crowd regions "
               f"({sum(e - s for s, e, _ in regions):.1f} s)  [{format_hms(time.time() - t0)}]")
     print(f"\n[Batch Done] {len(recordings)} recordings | Total: {format_hms(time.time() - t_batch)}")

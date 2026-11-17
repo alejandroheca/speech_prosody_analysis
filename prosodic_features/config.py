@@ -32,12 +32,13 @@ METADATA_CROWD_COLUMN    = "ACTIVE_CROWD"         # 1 / 0: detect the crowd and 
 # within them gets the target speaker's name (step 02; see metadata.speaker_name).
 METADATA_MARK_COLUMNS    = [("ONSET_S1", "OFFSET_S1"), ("ONSET_S2", "OFFSET_S2")]
 
-RAW_AUDIO_DIR   = DATA_DIR / "audio" / "raw"                              # input of step 01
+RAW_AUDIO_DIR   = Path(os.environ.get("CROWD_RAW_AUDIO_DIR", DATA_DIR / "audio" / "raw"))  # input of steps 01, 03
 DENOISED_DIR    = DATA_DIR / "audio" / "separated" / "denoised" / "pass01"  # speech (step 01)
 CROWD_DIR       = DATA_DIR / "audio" / "separated" / "noise" / "pass01"     # crowd = mix - speech (step 01)
 DIARIZATION_DIR = DATA_DIR / "derived" / "diarization"                    # step 02 (diarized recordings)
 TRANSCRIPT_DIR  = DATA_DIR / "derived" / "transcripts"                    # step 02
 CROWD_CNN_DIR   = DATA_DIR / "derived" / "crowd_cnn"                      # step 04
+QUALITY_DIR     = DATA_DIR / "derived" / "quality"                        # step 03, per row
 FEATURES_DIR    = DATA_DIR / "derived" / "features"                       # step 05
 # One row per processed recording, next to the metadata file (steps 03, 05)
 RECORDINGS_DONE_CSV = AUDIO_METADATA.parent / "recordings_done.csv"
@@ -79,13 +80,25 @@ SILERO_SPEECH_PAD_MS  = 30      # padding (ms) added to both ends of each chunk 
 SILERO_MERGE_GAP_S    = 0.05    # chunks closer than this (s) are joined into one
 CHUNK_END_PAD_S       = 0.03    # after transcription, a chunk ends this long after its last word
 SENTENCE_FRAGMENT_MAX_S = 0.5   # a sentence piece shorter than this in a chunk shared with
-                                # the neighbouring sentence is a fragment (see fit_sentences_to_chunks)
-SENTENCE_END_CHARS = ".?!"      # a sentence not ending in one of these (or followed by one
-                                # starting in lowercase) is unfinished...
-SENTENCE_SPLIT_MIN_GAP_S = 5.0  # a pause this long (s) after a word without punctuation ends the
-                                # sentence (see split_at_long_pauses)
-SENTENCE_JOIN_MAX_GAP_S = 3.0   # ...and joined with the next one if the same speaker
-                                # goes on within this many seconds (see join_unfinished_sentences)
+                                # the neighbouring sentence is a fragment (see sentences.fit_sentences_to_chunks)
+# Sentences are built after WhisperX, from the words, by prosodic_features/sentences.py
+# (rules in its docstring): replacements first, then a sentence ends at . ? ! or at a
+# change of speaker (an interrupted sentence gets a "."); no pause rule.
+# Replacements, word by word. Entries that start with punctuation are replaced anywhere
+# in a word (an ellipsis becomes a comma); the others replace a whole word.
+ABBREVIATIONS = {
+    "...": ",", "…": ",",
+    "Mr.": "Mister", "Mrs.": "Missus", "Ms.": "Miz", "Dr.": "Doctor", "Rev.": "Reverend",
+    "Gov.": "Governor", "Sen.": "Senator", "Rep.": "Representative", "Gen.": "General",
+    "Prof.": "Professor", "St.": "Saint", "Jr.": "Junior", "Sr.": "Senior",
+    "vs.": "versus", "etc.": "etcetera", "i.e.": "that is", "e.g.": "for example",
+    "a.m.": "AM", "p.m.": "PM", "A.D.": "AD", "B.C.": "BC",
+    "U.S.": "United States", "U.S.A.": "United States of America", "U.N.": "United Nations",
+}
+# ...of which these come before a name and never end a sentence (the others end one
+# when the next word is capitalised)
+ABBREVIATION_TITLES = {"Mr.", "Mrs.", "Ms.", "Dr.", "Rev.", "Gov.", "Sen.", "Rep.", "Gen.",
+                       "Prof.", "St."}
 
 WHISPER_MODEL        = "large-v3"
 WHISPER_DEVICE       = "cpu"
@@ -101,11 +114,16 @@ TRIM_WORDS_SLACK = 3            # see transcription.handle_edge_words
 
 # ---------------------------------------------------------------------------
 # Step 03: speech quality (TorchAudio-Squim objective model, no reference) of
-# the original recording, on its Silero chunks (see speech_quality.py)
+# the original recording, on a random set of its Silero chunks (see speech_quality.py)
 # ---------------------------------------------------------------------------
 SQUIM_SR           = 16000
 SQUIM_WINDOW_S     = 10.0       # chunks are scored in windows of at most this long
 SQUIM_MIN_WINDOW_S = 0.5        # shorter windows are skipped
+SQUIM_N_CHUNKS     = None       # a number: that many chunks drawn at random, one score per
+                                #   recording (recordings_done.csv); None: every chunk and
+                                #   sentence scored on its own (derived/quality, then a
+                                #   speech_quality column per row in the step-05 tables)
+SQUIM_SEED         = 0          # fixed, so a rerun draws the same chunks
 
 # ---------------------------------------------------------------------------
 # Step 04, recordings with ACTIVE_CROWD: crowd detection (CNN-TCN of
@@ -114,7 +132,9 @@ SQUIM_MIN_WINDOW_S = 0.5        # shorter windows are skipped
 CNN_DEVICE       = "cpu"
 CNN_BATCH_SIZE   = 1
 CNN_MEDIAN_FILTER_S = 3.0       # smoothing of the detected regions (the CNN's default)
-CNN_MIN_MEAN_SCORE  = 0.8       # keep only regions whose mean crowd probability is above this
+                                # Every region is saved, with its mean probability; which
+                                # ones count as crowd reactions is decided in step 05
+                                # (CROWD_MIN_MEAN_SCORE)
 
 # ---------------------------------------------------------------------------
 # Step 05: acoustic features
@@ -131,8 +151,15 @@ FEATURES_UNITS     = tuple(u for u in ("chunk", "sentence")
 # but one; lower it to keep the computer usable or on a shared server.
 FEATURES_N_WORKERS = max(1, mp.cpu_count() - 1)
 
-REVERB_LAG_S        = 0.05      # trimmed from both ends of a gap for the *_rob measures
+REVERB_LAG_S        = 0.08      # trimmed from both ends of a gap for the *_rob measures
 MIN_SEGMENT_S       = 0.25      # shorter segments get NaN openSMILE features
+CROWD_MIN_MEAN_SCORE = 0.8      # a step-04 CNN region counts as a crowd reaction if its mean
+                                #   crowd probability is at least this; the others are ignored
+LAG_REACTION_WINDOW_S = 3.0     # crowd_energy_lag_rob: a CNN reaction counts if it starts
+                                #   at most this many seconds after the row's end
+CROWD_FLOOR_PERCENTILE = 10     # crowd_energy_floor: this percentile of the crowd loudness
+                                #   in the pauses without a crowd (static); subtracted
+                                #   from every crowd energy (crowd_gap.crowd_energy_floor)
 
 SPEECH_PREFIX = "sp_"           # prefix of the speech-side feature columns
 CROWD_LOUDNESS_KEY = "loudness_sma3_amean"   # eGeMAPS feature used as crowd loudness

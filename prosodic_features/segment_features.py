@@ -10,7 +10,7 @@ from typing import Optional
 import numpy as np
 
 from prosodic_features import config
-from prosodic_features.features.crowd_gap import cnn_gap_energy, crowd_gap
+from prosodic_features.features.crowd_gap import cnn_gap_energy, crowd_gap, lagged_reaction_energy
 from prosodic_features.features.opensmile_features import egemaps
 from prosodic_features.features.speech_rate import speech_rate
 
@@ -31,8 +31,18 @@ def compute_segment_features(task: dict) -> Optional[dict]:
       crowd_energy_end     crowd loudness in the end gap
       crowd_energy_around  sentences only: sum of the crowd loudness in the
                            inner gaps and the end gap
+      crowd_energy_end_lag_rob     loudness, after the row's end, of the CNN
+                           reaction still going at the row's end (whenever
+                           it started) or starting within
+                           LAG_REACTION_WINDOW_S after it, with the speech
+                           (Silero chunks, task["speech_chunks"]) inside it
+                           cut out (crowd_gap.lagged_reaction_energy)
+      crowd_energy_around_lag_rob  sentences only: crowd_energy_around_rob's
+                           inner gaps plus crowd_energy_end_lag_rob
     A gap counts only if a CNN crowd region (task["cnn_regions"]) overlaps
-    it; otherwise, or if it is too short to measure, it counts as 0. Crowd
+    it; otherwise, or if it is too short to measure, it counts as 0. Every
+    crowd loudness is minus the recording's static (task["crowd_floor"],
+    crowd_gap.crowd_energy_floor), not below 0. Crowd
     loudness is NaN for recordings without an active crowd
     (task["is_speech"] False) and for multi_speaker sentences.
 
@@ -60,20 +70,26 @@ def compute_segment_features(task: dict) -> Optional[dict]:
 
         end_gap = crowd_gap(y_crowd, sr, end, task["next_start"], measure_loudness=False)
         sentence = task["unit"] == "sentence"
-        keys = ["crowd_energy_end", "crowd_energy_end_rob"]
+        keys = ["crowd_energy_end", "crowd_energy_end_rob", "crowd_energy_end_lag_rob"]
         if sentence:
-            keys += ["crowd_energy_around", "crowd_energy_around_rob"]
+            keys += ["crowd_energy_around", "crowd_energy_around_rob", "crowd_energy_around_lag_rob"]
         crowd = {k: np.nan for k in keys}
         if task["is_speech"] and not multi_speaker:
             gaps = [(pieces[i][1], pieces[i + 1][0]) for i in range(len(pieces) - 1)]
             gaps.append((end, task["next_start"]))
-            energies = [cnn_gap_energy(y_crowd, sr, gs, ge, task["cnn_regions"])
+            energies = [cnn_gap_energy(y_crowd, sr, gs, ge, task["cnn_regions"], task["crowd_floor"])
                         for gs, ge in gaps]
             crowd["crowd_energy_end"] = energies[-1]["crowd_energy"]
             crowd["crowd_energy_end_rob"] = energies[-1]["crowd_energy_rob"]
+            crowd["crowd_energy_end_lag_rob"] = lagged_reaction_energy(
+                y_crowd, sr, -np.inf, end, task["cnn_regions"], task["speech_chunks"],
+                task["crowd_floor"])
             if sentence:
                 crowd["crowd_energy_around"] = sum(e["crowd_energy"] for e in energies)
                 crowd["crowd_energy_around_rob"] = sum(e["crowd_energy_rob"] for e in energies)
+                crowd["crowd_energy_around_lag_rob"] = (
+                    sum(e["crowd_energy_rob"] for e in energies[:-1])     # inner gaps
+                    + crowd["crowd_energy_end_lag_rob"])
 
         row = {
             "seg_idx": task["seg_idx"],

@@ -31,3 +31,26 @@ def read_label_spans(path: Path) -> list[tuple[float, float]]:
         chunks.append((start, end))
     chunks.sort(key=lambda c: c[0])
     return chunks
+
+
+def read_cnn_regions(path: Path, min_mean_score: float) -> list[tuple[float, float]]:
+    """[(start, end), ...] of the step-04 CNN regions (<stem>_crowd_cnn.txt,
+    labels "crowd mean=<p>") whose mean crowd probability is at least
+    min_mean_score, sorted by start. A label without a mean is kept."""
+    regions: list[tuple[float, float]] = []
+    if not path.exists():
+        return regions
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        start, end = safe_float(parts[0]), safe_float(parts[1])
+        if start is None or end is None or end <= start:
+            continue
+        label = parts[2] if len(parts) > 2 else ""
+        mean = safe_float(label.split("mean=", 1)[1]) if "mean=" in label else None
+        if mean is not None and mean < min_mean_score:
+            continue
+        regions.append((start, end))
+    regions.sort(key=lambda r: r[0])
+    return regions

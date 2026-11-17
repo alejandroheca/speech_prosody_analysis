@@ -6,6 +6,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from prosodic_features import config
+
 
 def amplitude_percentile(y: np.ndarray, q: float) -> float:
     """The q-th percentile of the absolute sample amplitude of y."""
@@ -31,6 +33,16 @@ def load_audio_mono(path: Path, target_sr: int,
         data = data[: int(max_seconds * sr)]
 
     return data.astype(np.float32), sr
+
+
+def find_raw_audio(stem: str) -> Optional[Path]:
+    """The original recording <stem>.flac or <stem>.wav, in config.RAW_AUDIO_DIR
+    or any of its subfolders; None if it is not there."""
+    for suffix in (".flac", ".wav"):
+        found = sorted(config.RAW_AUDIO_DIR.rglob(f"{stem}{suffix}"))
+        if found:
+            return found[0]
+    return None
 
 
 def find_audio_file(folder: Path, prefix: str, stem: str) -> Path:

@@ -7,8 +7,8 @@ Step 02: speech chunks, words and speakers of every recording.
 
 For each recording in config.AUDIO_METADATA (its speech file from step 01):
   1. Silero VAD finds the speech chunks.
-  2. WhisperX transcribes the whole recording in one pass (it finds the
-     sentences itself; a sentence can span chunks), cutting it into its
+  2. WhisperX transcribes the whole recording in one pass (its own
+     segments are saved as they are), cutting it into its
      decoding windows with its own VAD (WHISPER_VAD_METHOD, Silero), and
      aligns the words on the recording itself, so each word lands where
      it was spoken. The words are fitted to the Silero chunks in 4.
@@ -21,30 +21,23 @@ For each recording in config.AUDIO_METADATA (its speech file from step 01):
      talks (ONSET_S1/OFFSET_S1, ONSET_S2/OFFSET_S2), the diarization
      speaker that talks most within them gets the target's name, and the
      others keep their SPEAKER_xx labels.
-     A sentence is ended at a pause of SENTENCE_SPLIT_MIN_GAP_S (5 s) or
-     more after a word without punctuation (split_at_long_pauses): WhisperX
-     sometimes stops punctuating and runs sentences together.
-  4. Edge words (handle_edge_words): stray words at a sentence's edges
+  4. Edge words (handle_edge_words): stray words at a segment's edges
      that are not in its text are dropped; each word belongs to the chunk
      it overlaps most, and the first / last word of each chunk is moved
      inside the chunk if it crosses it. Each chunk's end is then moved
      back to its last word's end + CHUNK_END_PAD_S (trim_chunk_ends); these
      trimmed chunks are the ones saved and used from here on (step 05
-     too). A sentence that does not end in . ? ! (or is followed by one
-     starting in lowercase) is joined with the next one if the same speaker goes on within SENTENCE_JOIN_MAX_GAP_S
-     (join_unfinished_sentences). Sentences (fit_sentences_to_chunks):
-     a sentence can span chunks, but a piece shorter than
-     SENTENCE_FRAGMENT_MAX_S in a chunk shared with the neighbouring
-     sentence is an alignment fragment and the sentence leaves that chunk
-     to its neighbour. The first sentence of each chunk starts at the
-     chunk's start, the last one ends at the chunk's end.
+     too).
+No sentence wrangling here: the sentences are built later, from the words,
+by prosodic_features/sentences.py (step 05), so they can change without
+transcribing again.
 
 Outputs, per recording (config.TRANSCRIPT_DIR; recordings with a JSON are
 skipped):
-  <name>.json                 sentences with their words and speakers
+  <name>.json                 WhisperX segments with their words (chunk, speaker)
   <name>_silero_chunks.txt    Audacity labels: VAD chunks, ends trimmed (step 4)
   <name>_words.txt            Audacity labels: words (after step 4)
-  <name>_sentences.txt        Audacity labels: sentences
+  <name>_sentences.txt        Audacity labels: WhisperX segments (step 05 writes the final sentences)
 and, for diarized recordings (config.DIARIZATION_DIR):
   denoised_<name>_diarization.json, denoised_<name>.rttm
 """
@@ -64,8 +57,7 @@ from prosodic_features.audio import find_audio_file
 from prosodic_features.metadata import Recording, clean_stem, load_recordings
 from prosodic_features.speakers import (assign_word_speakers, identify_target_speaker,
                                  load_speaker_turns, rename_speaker, set_segment_speaker)
-from prosodic_features.transcription import (detect_speech_chunks, fit_sentences_to_chunks,
-                                      handle_edge_words, join_unfinished_sentences, split_at_long_pauses,
+from prosodic_features.transcription import (detect_speech_chunks, handle_edge_words,
                                       transcribe, trim_chunk_ends)
 from prosodic_features.utils import format_hms
 
@@ -114,7 +106,6 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     print("  [2/3] Transcribing the whole recording...")
     sentences = transcribe(audio, models["whisper"], models["align"], models["align_meta"])
     sentences = [s for s in sentences if s["words"]]
-    sentences, n_split = split_at_long_pauses(sentences)
     all_words = [w for s in sentences for w in s["words"]]
 
     # 3. speakers, on all words (step 4 keeps these word objects, or copies them)
@@ -146,20 +137,15 @@ def transcribe_recording(audio_path: Path, models: dict, rec: Recording) -> None
     #    inside the chunk; sentence times follow
     counts = handle_edge_words(sentences, chunks)
     sentences = [s for s in sentences if s["words"]]
-    sentences, n_joined = join_unfinished_sentences(sentences)
     chunks = trim_chunk_ends(chunks, sentences)
     write_audacity_labels(out["chunks"], [
         (c["start"], c["end"], f"chunk_{i:04d} ({c['end'] - c['start']:.2f}s)")
         for i, c in enumerate(chunks)])
-    n_fragments = fit_sentences_to_chunks(sentences, chunks)
     for s in sentences:
         set_segment_speaker(s)
     words = [w for s in sentences for w in s["words"]]
     print(f"  [edges] {counts['moved']} word boundaries moved inside their chunk, "
-          f"{counts['dropped']} stray words dropped, {counts['in_gap']} words in a gap; "
-          f"{n_fragments} sentence fragments left to the neighbouring sentence's chunk; "
-          f"{n_joined} unfinished sentences joined with the next one; "
-          f"{n_split} split at a pause of {config.SENTENCE_SPLIT_MIN_GAP_S:g}+ s after a word without punctuation")
+          f"{counts['dropped']} stray words dropped, {counts['in_gap']} words in a gap")
 
     out["json"].write_text(json.dumps({
         "audio_path": str(audio_path),

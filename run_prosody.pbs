@@ -1,0 +1,50 @@
+#!/bin/bash
+# Run the 5-step prosody pipeline on a GPU. Each step uses its own conda env:
+#   1,5 -> crowd_audio   2,3 -> crowd_transcribe   4 -> crowd_train (crowd CNN)
+#
+#   qsub run_prosody.pbs
+
+#PBS -N prosody
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb:ngpus=1
+
+set -euo pipefail
+
+REPO="$EPHEMERAL/prosody_project/speech_prosody_analysis"
+cd "$REPO"
+
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+
+# HF token (diarization) + a persistent model cache in ephemeral
+export HF_TOKEN="$(cat "$HOME/.hf_token")"
+export HF_HOME="$EPHEMERAL/prosody_project/hf_cache"
+export TORCH_HOME="$EPHEMERAL/prosody_project/torch_cache"
+mkdir -p "$HF_HOME" "$TORCH_HOME"
+
+echo "[pbs] host=$(hostname)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+
+echo "=== step 1: separate (crowd_audio) ==="
+conda activate crowd_audio
+python 01_separate.py
+conda deactivate
+
+echo "=== step 2: transcribe (crowd_transcribe) ==="
+conda activate crowd_transcribe
+python 02_transcribe.py
+
+echo "=== step 3: quality (crowd_transcribe) ==="
+python 03_quality.py
+conda deactivate
+
+echo "=== step 4: crowd detection (crowd_train) ==="
+conda activate crowd_train
+python 04_crowd_detection.py
+conda deactivate
+
+echo "=== step 5: features (crowd_audio) ==="
+conda activate crowd_audio
+python 05_features.py
+conda deactivate
+
+echo "[pbs] pipeline finished"

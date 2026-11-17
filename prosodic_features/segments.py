@@ -6,6 +6,7 @@ its voiced pieces:
 from __future__ import annotations
 
 from prosodic_features import config
+from prosodic_features.sentences import build_sentences
 from prosodic_features.utils import safe_float
 
 
@@ -19,9 +20,10 @@ def load_sentences(transcript: dict, chunks: list[tuple[float, float]]) -> list[
     own part. A sentence without chunks gets its own span as one piece.
     multi_speaker: the sentence's words are not all from one speaker.
     Words without a speaker, and sentences without one, get
-    config.DEFAULT_SPEAKER. Sentences without valid words are dropped."""
+    config.DEFAULT_SPEAKER. Sentences without valid words are dropped.
+    The sentences are those of sentences.build_sentences (rules there)."""
     sentences: list[dict] = []
-    for seg in transcript.get("segments", []):
+    for seg in build_sentences(transcript, chunks):
         words = []
         for w in seg.get("words", []):
             ws, we = safe_float(w.get("start")), safe_float(w.get("end"))
@@ -54,20 +56,24 @@ def load_chunks(transcript: dict, chunks: list[tuple[float, float]]) -> list[dic
     """One row per Silero chunk, as [{start, end, speaker, multi_speaker,
     text, words, pieces, sentence_end}], by start.
 
-    Each word belongs to the chunk containing its midpoint. A chunk with one
+    Each word belongs to its chunk as in sentences.build_sentences (step
+    02's chunk, else the one containing its midpoint; a sentence's first /
+    last word in a gap goes to the next / previous chunk); other words in a
+    gap belong to no row. A chunk with one
     speaker gives one row with the chunk's own start and end. A chunk with a
     speaker change gives one row per run of same-speaker words, cut at the
     runs' word edges (the outer edges stay the chunk's), all with
     multi_speaker=True. Chunks without words are dropped. pieces is the row
-    itself; sentence_end: the row contains the last word of a sentence."""
+    itself; sentence_end: the row contains the last word of a sentence
+    (sentences.build_sentences)."""
     words: list[dict] = []
-    for seg in transcript.get("segments", []):
+    for seg in build_sentences(transcript, chunks):
         valid = []
         for w in seg.get("words", []):
             ws, we = safe_float(w.get("start")), safe_float(w.get("end"))
             txt = (w.get("word") or "").strip()
             if ws is not None and we is not None and txt:
-                valid.append({"start": ws, "end": we, "word": txt,
+                valid.append({"start": ws, "end": we, "word": txt, "chunk": w.get("chunk"),
                               "speaker": w.get("speaker") or config.DEFAULT_SPEAKER,
                               "is_sentence_end": False})
         if valid:
@@ -76,8 +82,8 @@ def load_chunks(transcript: dict, chunks: list[tuple[float, float]]) -> list[dic
     words.sort(key=lambda w: w["start"])
 
     rows: list[dict] = []
-    for cs, ce in chunks:
-        cw = [w for w in words if cs <= 0.5 * (w["start"] + w["end"]) <= ce]
+    for k_chunk, (cs, ce) in enumerate(chunks):
+        cw = [w for w in words if w["chunk"] == k_chunk]
         if not cw:
             continue
         runs: list[list[dict]] = [[cw[0]]]

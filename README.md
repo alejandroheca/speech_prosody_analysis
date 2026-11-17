@@ -9,10 +9,12 @@ The pipeline takes a recording (`.flac` recommended; `.wav` also accepted) and:
 
 1. denoises the speech, separating the speaker's voice from the crowd and
    background;
-2. transcribes the speech word by word and splits it into sentences, labelling
+2. transcribes the speech word by word, labelling
    who speaks when in multi-speaker recordings;
-3. estimates the recording's speech quality (PESQ, by TorchAudio-Squim, on its
-   speech only);
+3. estimates speech quality (PESQ, by TorchAudio-Squim, on the denoised
+   speech): one score per recording from a random sample of its speech
+   chunks (recording metadata), or, by default, one score per chunk and per
+   sentence (a column of the feature tables, e.g. as a control);
 4. in recordings with an active crowd (`ACTIVE_CROWD = 1`), detects crowd
    reactions with the CNN of
    [crowd_reaction_analysis](https://github.com/chymaera96/crowd_reaction_analysis);
@@ -124,10 +126,10 @@ python 05_features.py
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_separate.py` | Splits each recording into speech (GTCRN speech enhancement) and crowd (the original minus the speech), mono 16 kHz. |
-| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns the whole recording in one pass (WhisperX), fits the words to the chunks (each chunk's first and last word kept inside it), joins sentences WhisperX cut at a pause, and assigns each word a speaker. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
-| 3 | `03_quality.py` | Estimates the speech quality of the denoised speech, without a reference, on its speech chunks: PESQ from 1 (bad) to 4.5 (excellent), by TorchAudio-Squim, written to `recordings_done.csv`. |
-| 4 | `04_crowd_detection.py` | In recordings with `ACTIVE_CROWD = 1`, runs the crowd-reaction CNN (CNN-TCN, crowd-event head) on the original recording and keeps the crowd regions with a mean probability above `CNN_MIN_MEAN_SCORE` (0.8). |
-| 5 | `05_features.py` | Normalizes the gain of the speech and crowd tracks, then computes, per chunk and per sentence (one table each), eGeMAPS (openSMILE) and speech rate on its voiced parts, and the duration and crowd loudness of its gaps. |
+| 2 | `02_transcribe.py` | Finds speech chunks (Silero VAD), transcribes and word-aligns the whole recording in one pass (WhisperX), fits the words to the chunks (each chunk's first and last word kept inside it), and assigns each word a speaker. No sentence wrangling: sentences are built in step 5. Recordings with `DIARIZATION_NEEDED = 1` are diarized first (pyannote), and the target speaker is identified from the speaker marks. |
+| 3 | `03_quality.py` | Estimates speech quality on the denoised speech of step 1, without a reference: PESQ from 1 (bad) to 4.5 (excellent), by TorchAudio-Squim. With `SQUIM_N_CHUNKS = None` (default), every chunk and sentence is scored on its own voiced pieces and saved in `data/derived/quality/` (step 5 adds it as a `speech_quality` column per row); with a number, that many speech chunks (Silero VAD) are drawn at random and one score per recording is written to `recordings_done.csv`. Needs the denoised speech, the step-2 transcript (per-row mode) and the original recording (whose file name keys `recordings_done.csv`). |
+| 4 | `04_crowd_detection.py` | In recordings with `ACTIVE_CROWD = 1`, runs the crowd-reaction CNN (CNN-TCN, crowd-event head) on the original recording and saves all its crowd regions, each with its mean probability. Which regions count as crowd reactions is decided in step 05 (`CROWD_MIN_MEAN_SCORE`, 0.8). |
+| 5 | `05_features.py` | Builds the sentences from the transcript's words (`prosodic_features/sentences.py`: abbreviations written out and ellipses turned into commas, then a sentence ends at . ? ! or at a change of speaker, where it gets a "."; no pause rule) and writes them as a label track. Normalizes the gain of the speech and crowd tracks, then computes, per chunk and per sentence (one table each), eGeMAPS (openSMILE) and speech rate on its voiced parts, and the duration and crowd loudness of its gaps. |
 
 Each step skips recordings whose outputs already exist, so an interrupted run
 can be restarted. `SEPARATE_N_WORKERS` and `FEATURES_N_WORKERS` in `config.py`
@@ -146,8 +148,9 @@ data/
   audio/separated/denoised/pass01/denoised_<name>.flac   speech (step 1)
   audio/separated/noise/pass01/noise_<name>.flac         crowd (step 1)
   derived/diarization/                                   speaker turns, diarized recordings only (step 2)
-  derived/transcripts/<name>.json                        sentences and words, with times and speakers (step 2)
-  derived/transcripts/<name>_*.txt                       label tracks: chunks, words, sentences (step 2)
+  derived/transcripts/<name>.json                        WhisperX segments and words, with times and speakers (step 2)
+  derived/transcripts/<name>_*.txt                       label tracks: chunks, words, WhisperX segments (step 2)
+  derived/features/<name>_sentences.txt                  label track: the final sentences (step 5)
   derived/crowd_cnn/<name>_crowd_cnn.txt                 crowd regions, label track (step 4)
   derived/features/<name>_chunk_features.csv             one row per speech chunk (step 5)
   derived/features/<name>_sentence_features.csv          one row per sentence (step 5)
@@ -168,17 +171,21 @@ crowd ones when `ACTIVE_CROWD = 0`) are left out.
 |---|---|
 | `start`, `end`, `speaker`, `text` | the chunk or sentence |
 | `multi_speaker` | words of more than one speaker |
-| `speech_quality` | the recording's speech quality (PESQ, 1–4.5), same on every row |
+| `speech_quality` | speech quality (PESQ, 1–4.5): the row's own (default), or the recording's, same on every row (`SQUIM_N_CHUNKS` a number) |
 | `sentence_end` / `n_chunks` | chunks: ends a sentence / sentences: number of chunks |
 | `duration`, `n_words`, `word_rate` | voiced duration, words, words per second |
 | `gap_duration`, `reaction_end` | the gap until the next row |
 | `crowd_energy_end` | crowd loudness in the gap after the row |
 | `crowd_energy_around` | sentences only: crowd loudness in the gaps inside and after the sentence |
-| `crowd_energy_end_rob_lag` | `crowd_energy_end_rob` of the previous row |
+| `crowd_energy_end_lag_rob` | crowd loudness of the reaction still going at the row's end or starting within 3 s after it, speech cut out |
+| `crowd_energy_floor` | the recording's static: 10th percentile of the crowd loudness in the pauses without a crowd |
 | `sp_<feature>` | the 88 eGeMAPS features of the speech |
 
-`_rob` versions leave out 50 ms at each end of a gap. Crowd loudness counts
-only in gaps where step 4 found a crowd reaction (0 otherwise). Both audio
+`_rob` versions leave out 80 ms at each end of a gap. Crowd loudness counts
+only in gaps where step 4 found a crowd reaction (0 otherwise), and is the
+loudness above the recording's static: minus `crowd_energy_floor` (computed
+per recording, from the pauses between speech chunks that no crowd region
+overlaps), not below 0. Both audio
 tracks are divided by the 99th percentile of the original recording's
 amplitude, so recordings with different gain are comparable.
 
@@ -202,6 +209,7 @@ prosodic_features/
   speakers.py          step 2: speaker of each word and sentence
   speech_quality.py    step 3: speech quality (Squim)
   crowd_detection.py   step 4: crowd regions (CNN of crowd_reaction_analysis)
+  sentences.py         step 5: sentences from the words (all sentence rules)
   segments.py          step 5: chunks or sentences and their voiced parts
   segment_features.py  step 5: all features of one chunk or sentence
   features/            step 5: one file per feature

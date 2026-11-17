@@ -2,8 +2,9 @@
 
 The model's event head gives, every 40 ms, the probability that the crowd
 reacts (whatever the polarity). The package thresholds and smooths it
-into regions; here only regions whose mean probability is above
-CNN_MIN_MEAN_SCORE are kept."""
+into regions; every region is returned with its mean probability (which
+regions count as crowd reactions is decided in step 05,
+config.CROWD_MIN_MEAN_SCORE)."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -25,7 +26,6 @@ def detect_crowd(audio_path: Path) -> list[tuple[float, float, float]]:
         audio_path=audio_path,
         median_filter_sec=config.CNN_MEDIAN_FILTER_S,
         batch_size=config.CNN_BATCH_SIZE,
-        min_mean_score=config.CNN_MIN_MEAN_SCORE,
         mode="event",
         show_progress=False,
     )

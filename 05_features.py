@@ -6,13 +6,17 @@ Step 05: prosodic and crowd-reaction features of every transcribed recording.
 
 For each recording in config.AUDIO_METADATA with a step-02 transcript (and,
 if ACTIVE_CROWD = 1, its step-04 crowd regions):
-  0. Speech quality: the step-03 estimate of the original recording, read
-     from config.RECORDINGS_DONE_CSV (speech_quality, PESQ from 1 to 4.5;
-     one value per recording). Gain: the speech and crowd signals are divided by the
+  0. Speech quality (PESQ, from 1 to 4.5) from step 03: with
+     SQUIM_N_CHUNKS = None, one score per row, read from
+     config.QUALITY_DIR/<name>_<unit>_quality.csv (matched on start and
+     end); otherwise one score per recording (a random sample of its
+     chunks), read from config.RECORDINGS_DONE_CSV and put on every row. Gain: the speech and crowd signals are divided by the
      AMPLITUDE_REF_PERCENTILE (99th) percentile of the absolute amplitude of
      the original recording (one reference for both, same microphone), so
      all features are comparable across recordings with different gain.
-  1. Rows: one table per unit (config.FEATURES_UNITS, both by default):
+  1. Rows: one table per unit (config.FEATURES_UNITS, both by default);
+     the sentences are built from the transcript's words by
+     prosodic_features/sentences.py (rules in its docstring):
        chunk     one per Silero chunk, split where the speaker changes
                  inside it
        sentence  one per sentence of the transcript; its voiced pieces are
@@ -23,10 +27,17 @@ if ACTIVE_CROWD = 1, its step-04 crowd regions):
      (crowd loudness in the end gap); for sentences also
      crowd_energy_around (sum over the gaps between its chunks and the end
      gap). A gap counts only if a CNN crowd region overlaps it (else 0).
-     Crowd loudness only for recordings with ACTIVE_CROWD = 1.
-  3. Per row: crowd_energy_end_rob of the previous row
-     (crowd_energy_end_rob_lag; for the first one, the crowd before the
-     speech starts).
+     crowd_energy_end_lag_rob: loudness, after the row's end, of the CNN
+     crowd region still going at the row's end (whenever it started) or
+     starting within LAG_REACTION_WINDOW_S (3 s) after it, with any speech
+     (Silero chunks) inside it cut out (0 if there is none); for sentences
+     also crowd_energy_around_lag_rob: the inner gaps of
+     crowd_energy_around_rob plus crowd_energy_end_lag_rob.
+     Crowd loudness only for recordings with ACTIVE_CROWD = 1. Every crowd
+     loudness is minus the recording's static, crowd_energy_floor (not below
+     0): CROWD_FLOOR_PERCENTILE (10th) of the crowd loudness in the pauses
+     between Silero chunks that no CNN crowd region overlaps, computed per
+     recording and kept as a column (constant within the recording).
 
 Columns empty on every row (e.g. the crowd ones when ACTIVE_CROWD = 0) are
 left out of the table.
@@ -52,8 +63,8 @@ import pandas as pd
 
 from prosodic_features import config, recordings_done
 from prosodic_features.audio import amplitude_percentile, find_audio_file, load_audio_mono
-from prosodic_features.features.crowd_gap import cnn_gap_energy
-from prosodic_features.labels import read_label_spans
+from prosodic_features.features.crowd_gap import crowd_energy_floor
+from prosodic_features.labels import read_cnn_regions, read_label_spans, write_audacity_labels
 from prosodic_features.metadata import Recording, load_recordings
 from prosodic_features.segment_features import compute_segment_features
 from prosodic_features.segments import load_chunks, load_sentences
@@ -105,7 +116,7 @@ def process_recording(rec: Recording, raw_path: Path, speech_path: Path, crowd_p
     y_raw = load_audio_mono(raw_path, sr)[0]
     sq = recordings_done.get(raw_path.name, "speech_quality")
     quality = np.nan if sq is None else float(sq)
-    if sq is None:
+    if sq is None and config.SQUIM_N_CHUNKS is not None:
         print(f"  [quality] WARNING: no speech quality for {raw_path.name} (run step 03)")
     q = config.AMPLITUDE_REF_PERCENTILE
     amplitude_ref = amplitude_percentile(y_raw, q)
@@ -119,7 +130,9 @@ def process_recording(rec: Recording, raw_path: Path, speech_path: Path, crowd_p
     if not chunks:
         raise ValueError(f"No Silero chunks found in {chunks_path.name}")
     transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-    cnn_regions = read_label_spans(cnn_path) if cnn_path is not None else []
+    # CNN regions that count as crowd reactions: mean probability >= CROWD_MIN_MEAN_SCORE
+    cnn_regions = (read_cnn_regions(cnn_path, config.CROWD_MIN_MEAN_SCORE)
+                   if cnn_path is not None else [])
     for unit, features_csv in todo.items():
         features_table(unit, features_csv, transcript, chunks, cnn_regions, is_speech,
                        y_speech, y_crowd, quality, t_start)
@@ -138,17 +151,23 @@ def features_table(unit: str, features_csv: Path, transcript: dict, chunks: list
     segments = (load_sentences if unit == "sentence" else load_chunks)(transcript, chunks)
     if not segments:
         raise ValueError(f"No {unit}s with words")
+    if unit == "sentence":                              # the final sentences, to check by ear
+        labels = config.FEATURES_DIR / features_csv.name.replace("_sentence_features.csv", "_sentences.txt")
+        write_audacity_labels(labels, [(s["start"], s["end"], s["text"].replace("\t", " ")
+                                        + f" [{s['speaker']}]") for s in segments])
     print(f"         {len(segments)} {unit}s, "
           f"{sum(len(s['pieces']) for s in segments)} voiced pieces"
           + (f"; {len(cnn_regions)} CNN crowd regions" if is_speech else ""))
 
     if is_speech:
-        print("  [3/4] Pre-speech crowd loudness...")
-        pre_speech_crowd = cnn_gap_energy(y_crowd, sr, 0.0, segments[0]["start"],
-                                          cnn_regions)["crowd_energy_rob"]
-        print(f"         Pre-speech crowd loudness (rob): {pre_speech_crowd:.6f}")
+        print("  [3/4] Crowd floor (static)...")
+        crowd_floor = crowd_energy_floor(y_crowd, sr, chunks, cnn_regions)
+        print(f"         Crowd floor (p{config.CROWD_FLOOR_PERCENTILE} of the pauses without a crowd): "
+              f"{crowd_floor:.6f}")
+        if np.isnan(crowd_floor):
+            print("         WARNING: no pause without a crowd; crowd energies not floor-corrected")
     else:
-        pre_speech_crowd = np.nan
+        crowd_floor = np.nan
 
     print(f"  [4/4] Extracting {unit} features ({config.FEATURES_N_WORKERS} workers)...")
     shm_speech = shared_memory.SharedMemory(create=True, size=y_speech.nbytes)
@@ -160,7 +179,9 @@ def features_table(unit: str, features_csv: Path, transcript: dict, chunks: list
         tasks = [{
             "seg_idx": i, "segment": seg,
             "next_start": segments[i + 1].get("start") if i + 1 < len(segments) else audio_end,
-            "is_speech": is_speech, "cnn_regions": cnn_regions, "unit": unit,
+            "is_speech": is_speech, "cnn_regions": cnn_regions, "speech_chunks": chunks,
+            "crowd_floor": crowd_floor,
+            "unit": unit,
             "speech_shm": shm_speech.name, "crowd_shm": shm_crowd.name,
             "shape": y_speech.shape, "dtype": y_speech.dtype,
         } for i, seg in enumerate(segments)]
@@ -171,11 +192,32 @@ def features_table(unit: str, features_csv: Path, transcript: dict, chunks: list
     rows.sort(key=lambda r: r.pop("seg_idx"))
 
     df = pd.DataFrame(rows)
-    df["crowd_energy_end_rob_lag"] = df["crowd_energy_end_rob"].shift(1)
-    df.loc[df.index[0], "crowd_energy_end_rob_lag"] = pre_speech_crowd
-    df.insert(df.columns.get_loc("speaker") + 1, "speech_quality", quality)
+    df["crowd_energy_floor"] = round(crowd_floor, 6) if not np.isnan(crowd_floor) else np.nan
+    if config.SQUIM_N_CHUNKS is None:                  # per row, from step 03
+        qpath = config.QUALITY_DIR / f"{features_csv.name.split(f'_{unit}_features')[0]}_{unit}_quality.csv"
+        if qpath.exists():
+            q = pd.read_csv(qpath)
+            key = lambda d: list(zip(d["start"].round(3), d["end"].round(3)))
+            per_row = dict(zip(key(q), q["speech_quality"]))
+            values = [per_row.get(k, np.nan) for k in key(df)]
+            n_missing = sum(k not in per_row for k in key(df))
+            if n_missing:
+                print(f"  [quality] WARNING: {n_missing} rows not in {qpath.name}")
+        else:
+            print(f"  [quality] WARNING: no {qpath.name} (run step 03)")
+            values = np.nan
+        df.insert(df.columns.get_loc("speaker") + 1, "speech_quality", values)
+    else:
+        df.insert(df.columns.get_loc("speaker") + 1, "speech_quality", quality)
     empty = [c for c in df.columns if df[c].isna().all()]
     df = df.drop(columns=empty)
+    # text and crowd columns right after the row's times, to check them against the audio
+    # (e.g. in Audacity, with the CNN and sentence label tracks)
+    first = [c for c in ("start", "end", "text", "crowd_energy_end", "crowd_energy_end_rob",
+                         "crowd_energy_end_lag_rob", "crowd_energy_around", "crowd_energy_around_rob",
+                         "crowd_energy_around_lag_rob", "crowd_energy_floor",
+                         "reaction_end", "gap_duration", "gap_duration_rob") if c in df.columns]
+    df = df[first + [c for c in df.columns if c not in first]]
     df.to_csv(features_csv, index=False)
     print(f"  [Saved] {features_csv.name} ({len(df)} rows, {len(df.columns)} cols)"
           + (f"; left out, empty: {', '.join(empty)}" if empty else ""))
