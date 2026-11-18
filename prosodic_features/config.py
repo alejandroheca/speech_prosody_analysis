@@ -65,7 +65,7 @@ SEPARATE_N_WORKERS = 8
 # Step 02, recordings with DIARIZATION_NEEDED: speaker diarization (pyannote)
 # ---------------------------------------------------------------------------
 DIARIZATION_MODEL_ID = "pyannote/speaker-diarization-3.1"
-DIARIZATION_DEVICE   = "mps"    # falls back to CPU if an MPS op is unimplemented
+DIARIZATION_DEVICE   = os.environ.get("CROWD_DIARIZATION_DEVICE", "mps")  # falls back to CPU if an MPS op is unimplemented; "cuda" on a GPU node
 DIARIZATION_MAX_GAP_S      = 0.25   # merge same-speaker turns closer than this
 DIARIZATION_MIN_DURATION_S = 0.60   # then drop turns shorter than this
 
@@ -101,8 +101,8 @@ ABBREVIATION_TITLES = {"Mr.", "Mrs.", "Ms.", "Dr.", "Rev.", "Gov.", "Sen.", "Rep
                        "Prof.", "St."}
 
 WHISPER_MODEL        = "large-v3"
-WHISPER_DEVICE       = "cpu"
-WHISPER_COMPUTE_TYPE = "int8"
+WHISPER_DEVICE       = os.environ.get("CROWD_WHISPER_DEVICE", "cpu")          # "cuda" on a GPU node
+WHISPER_COMPUTE_TYPE = os.environ.get("CROWD_WHISPER_COMPUTE_TYPE", "int8") # "float16" on a GPU
 WHISPER_LANGUAGE     = "en"
 # VAD WhisperX uses to cut the recording into its <= 30 s decoding windows.
 # "silero" (not WhisperX's default, "pyannote"): with pyannote, a window at the
@@ -129,7 +129,7 @@ SQUIM_SEED         = 0          # fixed, so a rerun draws the same chunks
 # Step 04, recordings with ACTIVE_CROWD: crowd detection (CNN-TCN of
 # crowd_reaction_analysis, event head, on the original recording)
 # ---------------------------------------------------------------------------
-CNN_DEVICE       = "cpu"
+CNN_DEVICE       = os.environ.get("CROWD_CNN_DEVICE", "cpu")   # "cuda" on a GPU node
 CNN_BATCH_SIZE   = 1
 CNN_MEDIAN_FILTER_S = 3.0       # smoothing of the detected regions (the CNN's default)
                                 # Every region is saved, with its mean probability; which

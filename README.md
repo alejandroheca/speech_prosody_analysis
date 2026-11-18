@@ -141,6 +141,13 @@ The pipeline was developed on macOS (Apple silicon) with the package versions
 in `envs/`. Diarization runs on the Apple GPU (`DIARIZATION_DEVICE = "mps"`)
 and falls back to the CPU when needed.
 
+On a cluster with PBS, `qsub run_prosody.pbs` runs the five steps on a GPU
+node (`qsub -v DATA_SET=UK_politics run_prosody.pbs` reads the recordings and
+`recordings.xlsx` from `data/audio/raw/UK_politics/`). It sets the devices
+through environment variables that override `config.py`:
+`CROWD_DIARIZATION_DEVICE`, `CROWD_WHISPER_DEVICE`, `CROWD_CNN_DEVICE`
+(`cuda`) and `CROWD_WHISPER_COMPUTE_TYPE` (`float16`).
+
 ## Outputs
 
 ```

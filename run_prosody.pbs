@@ -1,8 +1,13 @@
 #!/bin/bash
-# Run the 5-step prosody pipeline on a GPU. Each step uses its own conda env:
-#   1,5 -> crowd_audio   2,3 -> crowd_transcribe   4 -> crowd_train (crowd CNN)
+# Runs the five steps of the prosody pipeline on a GPU node (PBS). Same steps
+# and environments as run_all.sh:
+#   1, 5 -> crowd_audio      2, 3, 4 -> crowd_transcribe
 #
 #   qsub run_prosody.pbs
+#   qsub -v DATA_SET=UK_politics run_prosody.pbs     # data/audio/raw/UK_politics (see Data below)
+#
+# Each step skips recordings whose outputs already exist, so a job that runs
+# out of walltime can simply be resubmitted.
 
 #PBS -N prosody
 #PBS -l walltime=24:00:00
@@ -10,35 +15,59 @@
 
 set -euo pipefail
 
-REPO="$EPHEMERAL/prosody_project/speech_prosody_analysis"
+PROJECT="$EPHEMERAL/prosody_project"
+REPO="$PROJECT/speech_prosody_analysis"
 cd "$REPO"
 
 eval "$(~/miniforge3/bin/conda shell.bash hook)"
 
-# HF token (diarization) + a persistent model cache in ephemeral
-export HF_TOKEN="$(cat "$HOME/.hf_token")"
-export HF_HOME="$EPHEMERAL/prosody_project/hf_cache"
-export TORCH_HOME="$EPHEMERAL/prosody_project/torch_cache"
-mkdir -p "$HF_HOME" "$TORCH_HOME"
+# --- Data -------------------------------------------------------------------
+# Outputs go to $REPO/data (CROWD_DATA_DIR). Without DATA_SET, the recordings
+# are read from data/audio/raw/ and the metadata from data/recordings.xlsx
+# (the repo defaults). With DATA_SET, both come from data/audio/raw/$DATA_SET/
+# (as on the laptop: civil_rights_divide/, UK_politics/; audio searched
+# recursively, so speaker subfolders are fine), and recordings_done.csv is
+# written there.
+export CROWD_DATA_DIR="$REPO/data"
+if [[ -n "${DATA_SET:-}" ]]; then
+  export CROWD_RAW_AUDIO_DIR="$CROWD_DATA_DIR/audio/raw/$DATA_SET"
+  export CROWD_AUDIO_METADATA="$CROWD_RAW_AUDIO_DIR/recordings.xlsx"
+else
+  export CROWD_RAW_AUDIO_DIR="$CROWD_DATA_DIR/audio/raw"
+  export CROWD_AUDIO_METADATA="$CROWD_DATA_DIR/recordings.xlsx"
+fi
 
-echo "[pbs] host=$(hostname)"
+# --- GPU --------------------------------------------------------------------
+# config.py defaults are for a Mac (diarization on mps, the rest on the CPU)
+export CROWD_DIARIZATION_DEVICE=cuda
+export CROWD_WHISPER_DEVICE=cuda
+export CROWD_WHISPER_COMPUTE_TYPE=float16
+export CROWD_CNN_DEVICE=cuda
+
+# --- Model caches (persistent, in ephemeral) and HF token -------------------
+export HF_HOME="$PROJECT/hf_cache"
+export TORCH_HOME="$PROJECT/torch_cache"
+mkdir -p "$HF_HOME" "$TORCH_HOME"
+# only needed when a recording has DIARIZATION_NEEDED = 1
+if [[ -f "$HOME/.hf_token" ]]; then export HF_TOKEN="$(cat "$HOME/.hf_token")"; fi
+
+echo "[pbs] host=$(hostname)  data set=${DATA_SET:-default}"
+echo "[pbs] metadata=$CROWD_AUDIO_METADATA"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+[[ -f "$CROWD_AUDIO_METADATA" ]] || { echo "[pbs] no metadata file: $CROWD_AUDIO_METADATA"; exit 1; }
+[[ -f "$REPO/models/gtcrn_simple.onnx" ]] || { echo "[pbs] missing models/gtcrn_simple.onnx (see README)"; exit 1; }
 
 echo "=== step 1: separate (crowd_audio) ==="
 conda activate crowd_audio
 python 01_separate.py
 conda deactivate
 
-echo "=== step 2: transcribe (crowd_transcribe) ==="
 conda activate crowd_transcribe
+echo "=== step 2: transcribe (crowd_transcribe) ==="
 python 02_transcribe.py
-
 echo "=== step 3: quality (crowd_transcribe) ==="
 python 03_quality.py
-conda deactivate
-
-echo "=== step 4: crowd detection (crowd_train) ==="
-conda activate crowd_train
+echo "=== step 4: crowd detection (crowd_transcribe) ==="
 python 04_crowd_detection.py
 conda deactivate
 
