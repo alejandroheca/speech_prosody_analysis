@@ -114,7 +114,8 @@ TRIM_WORDS_SLACK = 3            # see transcription.handle_edge_words
 
 # ---------------------------------------------------------------------------
 # Step 03: speech quality (TorchAudio-Squim objective model, no reference) of
-# the original recording, on a random set of its Silero chunks (see speech_quality.py)
+# the denoised speech: per chunk and sentence (default) or per recording, from
+# a random set of its Silero chunks (SQUIM_N_CHUNKS; see speech_quality.py)
 # ---------------------------------------------------------------------------
 SQUIM_SR           = 16000
 SQUIM_WINDOW_S     = 10.0       # chunks are scored in windows of at most this long
@@ -155,8 +156,7 @@ REVERB_LAG_S        = 0.08      # trimmed from both ends of a gap for the *_rob 
 MIN_SEGMENT_S       = 0.25      # shorter segments get NaN openSMILE features
 CROWD_MIN_MEAN_SCORE = 0.8      # a step-04 CNN region counts as a crowd reaction if its mean
                                 #   crowd probability is at least this; the others are ignored
-LAG_REACTION_WINDOW_S = 3.0     # crowd_energy_lag_rob: a CNN reaction counts if it starts
-                                #   at most this many seconds after the row's end
+LAG_REACTION_WINDOW_S = 3.0
 CROWD_FLOOR_PERCENTILE = 10     # crowd_energy_floor: this percentile of the crowd loudness
                                 #   in the pauses without a crowd (static); subtracted
                                 #   from every crowd energy (crowd_gap.crowd_energy_floor)

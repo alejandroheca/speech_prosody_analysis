@@ -98,8 +98,9 @@ reads this file. It uses these columns:
 
 `1`, `yes`, `y`, and `true` count as 1; any other value, including an empty
 cell, counts as 0. See `data/README.md` for how to choose the speaker marks.
-Set `CROWD_DATA_DIR` and `CROWD_AUDIO_METADATA` to use another data folder or
-metadata file. Column names and all other paths and
+Set `CROWD_DATA_DIR`, `CROWD_AUDIO_METADATA` and `CROWD_RAW_AUDIO_DIR` to use
+another data folder, metadata file or audio folder (`data/audio/raw/` by
+default; subfolders are searched too). Column names and all other paths and
 parameters are in `prosodic_features/config.py`.
 
 ## Running the pipeline
