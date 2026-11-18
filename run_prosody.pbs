@@ -4,7 +4,7 @@
 #   1, 5 -> crowd_audio      2, 3, 4 -> crowd_transcribe
 #
 #   qsub run_prosody.pbs
-#   qsub -v DATA_SET=UK_politics run_prosody.pbs     # data/audio/raw/UK_politics (see Data below)
+#   qsub -v DATA_SET=<subfolder> run_prosody.pbs     # data/audio/raw/<subfolder> (see Data below)
 #
 # Each step skips recordings whose outputs already exist, so a job that runs
 # out of walltime can simply be resubmitted.
@@ -25,9 +25,8 @@ eval "$(~/miniforge3/bin/conda shell.bash hook)"
 # Outputs go to $REPO/data (CROWD_DATA_DIR). Without DATA_SET, the recordings
 # are read from data/audio/raw/ and the metadata from data/recordings.xlsx
 # (the repo defaults). With DATA_SET, both come from data/audio/raw/$DATA_SET/
-# (as on the laptop: civil_rights_divide/, UK_politics/; audio searched
-# recursively, so speaker subfolders are fine), and recordings_done.csv is
-# written there.
+# (one subfolder per data set; audio searched recursively, so speaker
+# subfolders are fine), and recordings_done.csv is written there.
 export CROWD_DATA_DIR="$REPO/data"
 if [[ -n "${DATA_SET:-}" ]]; then
   export CROWD_RAW_AUDIO_DIR="$CROWD_DATA_DIR/audio/raw/$DATA_SET"
